@@ -15,11 +15,11 @@ Example:
         print("Valid address!")
 """
 
-import os
 from typing import Tuple
 
-from .config import Config
+from .config import Config, get_env
 from .bot import TradingBot
+from .crypto import verify_private_key
 
 
 def validate_address(address: str) -> bool:
@@ -76,22 +76,16 @@ def validate_private_key(key: str) -> Tuple[bool, str]:
     if not key:
         return False, "Private key cannot be empty"
 
-    # Normalize
-    normalized = key.strip().lower()
-    if normalized.startswith("0x"):
-        normalized = normalized[2:]
+    is_valid, result = verify_private_key(key)
+    if is_valid:
+        return True, result
 
-    # Check length (32 bytes = 64 hex chars)
-    if len(normalized) != 64:
+    if "64 hex characters" in result:
         return False, "Private key must be 64 hex characters (32 bytes)"
-
-    # Check valid hex
-    try:
-        int(normalized, 16)
-    except ValueError:
+    if "invalid characters" in result.lower():
         return False, "Private key contains invalid characters"
 
-    return True, f"0x{normalized}"
+    return False, result
 
 
 def format_price(price: float, decimals: int = 2) -> str:
@@ -129,24 +123,6 @@ def format_usdc(amount: float, decimals: int = 2) -> str:
         '$10.50 USDC'
     """
     return f"${amount:.{decimals}f} USDC"
-
-
-def get_env(name: str, default: str = "") -> str:
-    """
-    Get environment variable with POLY_ prefix.
-
-    Args:
-        name: Variable name (without POLY_ prefix)
-        default: Default value if not set
-
-    Returns:
-        Environment variable value or default
-
-    Example:
-        >>> # Gets POLY_SAFE_ADDRESS
-        >>> address = get_env("SAFE_ADDRESS")
-    """
-    return os.environ.get(f"POLY_{name}", default)
 
 
 def create_bot_from_env() -> TradingBot:

@@ -33,7 +33,7 @@ Example:
 
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 from dataclasses import dataclass, field
 from dataclasses import asdict
 import yaml

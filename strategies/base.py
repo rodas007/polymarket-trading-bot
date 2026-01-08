@@ -23,14 +23,13 @@ Usage:
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Dict, List
 
-from lib.console import Colors, LogBuffer, StatusDisplay, log, format_log
+from lib.console import LogBuffer, log
 from lib.market_manager import MarketManager, MarketInfo
-from lib.price_tracker import PriceTracker, FlashCrashEvent
-from lib.position_manager import PositionManager, Position
+from lib.price_tracker import PriceTracker
+from lib.position_manager import PositionManager
 from src.bot import TradingBot
 from src.websocket_client import OrderbookSnapshot
 
@@ -108,7 +107,7 @@ class BaseStrategy(ABC):
         # Open orders cache (refreshed in background)
         self._cached_orders: List[dict] = []
         self._last_order_refresh: float = 0
-        self._order_refresh_executor = ThreadPoolExecutor(max_workers=1)
+        self._order_refresh_task: Optional[asyncio.Task] = None
 
     @property
     def is_connected(self) -> bool:
@@ -130,24 +129,39 @@ class BaseStrategy(ABC):
         """Get cached open orders."""
         return self._cached_orders
 
-    def _refresh_orders_sync(self) -> None:
-        """Refresh open orders synchronously (runs in thread pool)."""
+    def _refresh_orders_sync(self) -> List[dict]:
+        """Refresh open orders synchronously (called via to_thread)."""
         try:
+            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                self._cached_orders = loop.run_until_complete(self.bot.get_open_orders())
+                return loop.run_until_complete(self.bot.get_open_orders())
             finally:
                 loop.close()
         except Exception:
+            return []
+
+    async def _do_order_refresh(self) -> None:
+        """Background task to refresh orders without blocking."""
+        try:
+            orders = await asyncio.to_thread(self._refresh_orders_sync)
+            self._cached_orders = orders
+        except Exception:
             pass
+        finally:
+            self._order_refresh_task = None
 
     def _maybe_refresh_orders(self) -> None:
-        """Schedule order refresh if interval has passed."""
+        """Schedule order refresh if interval has passed (fire-and-forget)."""
         now = time.time()
         if now - self._last_order_refresh > self.config.order_refresh_interval:
+            # Don't start new refresh if one is already running
+            if self._order_refresh_task is not None and not self._order_refresh_task.done():
+                return
             self._last_order_refresh = now
-            self._order_refresh_executor.submit(self._refresh_orders_sync)
+            # Fire and forget - doesn't block main loop
+            self._order_refresh_task = asyncio.create_task(self._do_order_refresh())
 
     def log(self, msg: str, level: str = "info") -> None:
         """
@@ -213,8 +227,17 @@ class BaseStrategy(ABC):
     async def stop(self) -> None:
         """Stop the strategy."""
         self.running = False
+
+        # Cancel order refresh task if running
+        if self._order_refresh_task is not None:
+            self._order_refresh_task.cancel()
+            try:
+                await self._order_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._order_refresh_task = None
+
         await self.market.stop()
-        self._order_refresh_executor.shutdown(wait=False)
 
     async def run(self) -> None:
         """Main strategy loop."""
@@ -235,7 +258,7 @@ class BaseStrategy(ABC):
                 # Check position exits
                 await self._check_exits(prices)
 
-                # Refresh orders in background
+                # Refresh orders in background (fire-and-forget)
                 self._maybe_refresh_orders()
 
                 # Update display

@@ -94,6 +94,28 @@ class MarketInfo:
             return "ENDED"
         return f"{mins:02d}:{secs:02d}"
 
+    def slug_timestamp(self) -> Optional[int]:
+        """Extract timestamp suffix from slug if present."""
+        if not self.slug:
+            return None
+        ts = self.slug.split("-")[-1]
+        if not ts.isdigit():
+            return None
+        try:
+            return int(ts)
+        except ValueError:
+            return None
+
+    def end_timestamp(self) -> Optional[int]:
+        """Parse end_date into epoch seconds if available."""
+        if not self.end_date:
+            return None
+        try:
+            end_date_str = self.end_date.replace("Z", "+00:00")
+            return int(datetime.fromisoformat(end_date_str).timestamp())
+        except Exception:
+            return None
+
     def is_ending_soon(self, threshold_seconds: int = 60) -> bool:
         """Check if market is ending within threshold."""
         mins, secs = self.get_countdown()
@@ -237,7 +259,37 @@ class MarketManager:
         self._on_disconnect_callbacks.append(callback)
         return callback
 
-    def discover_market(self) -> Optional[MarketInfo]:
+    def _update_current_market(self, market: MarketInfo) -> None:
+        """Update current market state."""
+        self._previous_slug = market.slug
+        self.current_market = market
+
+    def _market_sort_key(self, market: MarketInfo) -> Optional[int]:
+        """Get comparable timestamp for market ordering."""
+        return market.slug_timestamp() or market.end_timestamp()
+
+    def _should_switch_market(
+        self,
+        old_market: Optional[MarketInfo],
+        new_market: MarketInfo
+    ) -> bool:
+        """Check if new market should replace current market."""
+        if not old_market:
+            return True
+
+        old_tokens = set(old_market.token_ids.values())
+        new_tokens = set(new_market.token_ids.values())
+        if new_tokens == old_tokens:
+            return False
+
+        old_key = self._market_sort_key(old_market)
+        new_key = self._market_sort_key(new_market)
+        if old_key is not None and new_key is not None and new_key <= old_key:
+            return False
+
+        return True
+
+    def discover_market(self, update_state: bool = True) -> Optional[MarketInfo]:
         """
         Discover current 15-minute market.
 
@@ -261,16 +313,10 @@ class MarketManager:
             accepting_orders=market_data.get("accepting_orders", False),
         )
 
-        # Detect market change
-        if self._previous_slug and self._previous_slug != market.slug:
-            for callback in self._on_market_change_callbacks:
-                try:
-                    callback(self._previous_slug, market.slug)
-                except Exception:
-                    pass
-
-        self._previous_slug = market.slug
-        self.current_market = market
+        if update_state:
+            # Note: Market change callbacks are fired in _market_check_loop
+            # to ensure they run in the main thread after resubscription
+            self._update_current_market(market)
         return market
 
     async def _setup_websocket(self) -> bool:
@@ -328,13 +374,40 @@ class MarketManager:
             if not self._running:
                 break
 
-            old_tokens = set(self.token_ids.values()) if self.token_ids else set()
-            market = self.discover_market()
+            old_market = self.current_market
+            old_tokens = set(old_market.token_ids.values()) if old_market else set()
+            old_slug = old_market.slug if old_market else None
 
-            if market and self.auto_switch_market and self.ws:
-                new_tokens = set(market.token_ids.values())
-                if new_tokens != old_tokens:
-                    await self.ws.subscribe(list(new_tokens), replace=True)
+            # Run synchronous HTTP call in thread pool to avoid blocking
+            market = await asyncio.to_thread(self.discover_market, update_state=False)
+
+            if not market:
+                continue
+
+            # Check if market changed and resubscribe
+            new_tokens = set(market.token_ids.values())
+            if new_tokens == old_tokens:
+                self._update_current_market(market)
+                continue
+
+            if not (self.auto_switch_market and self.ws):
+                self._update_current_market(market)
+                continue
+
+            if not self._should_switch_market(old_market, market):
+                continue
+
+            # Market changed - resubscribe to new tokens
+            await self.ws.subscribe(list(new_tokens), replace=True)
+            self._update_current_market(market)
+
+            # Fire market change callbacks in main thread
+            if old_slug and old_slug != market.slug:
+                for callback in self._on_market_change_callbacks:
+                    try:
+                        callback(old_slug, market.slug)
+                    except Exception:
+                        pass
 
     async def start(self) -> bool:
         """
@@ -415,12 +488,25 @@ class MarketManager:
         Returns:
             New MarketInfo if found
         """
-        old_tokens = set(self.token_ids.values()) if self.token_ids else set()
-        market = self.discover_market()
+        old_market = self.current_market
+        old_tokens = set(old_market.token_ids.values()) if old_market else set()
 
-        if market and self.ws:
-            new_tokens = set(market.token_ids.values())
-            if new_tokens != old_tokens:
-                await self.ws.subscribe(list(new_tokens), replace=True)
+        # Run synchronous HTTP call in thread pool to avoid blocking
+        market = await asyncio.to_thread(self.discover_market, update_state=False)
 
+        if not market:
+            return None
+
+        new_tokens = set(market.token_ids.values())
+        if new_tokens == old_tokens:
+            self._update_current_market(market)
+            return self.current_market
+
+        if not self._should_switch_market(old_market, market):
+            return old_market
+
+        if self.ws:
+            await self.ws.subscribe(list(new_tokens), replace=True)
+
+        self._update_current_market(market)
         return market

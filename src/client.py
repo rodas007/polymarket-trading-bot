@@ -38,6 +38,7 @@ from dataclasses import dataclass
 import requests
 
 from .config import BuilderConfig
+from .http import ThreadLocalSessionMixin
 
 
 class ApiError(Exception):
@@ -78,7 +79,7 @@ class ApiCredentials:
         return bool(self.api_key and self.secret and self.passphrase)
 
 
-class ApiClient:
+class ApiClient(ThreadLocalSessionMixin):
     """
     Base HTTP client with common functionality.
 
@@ -102,10 +103,10 @@ class ApiClient:
             timeout: Request timeout in seconds
             retry_count: Number of retries on failure
         """
+        super().__init__()
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.retry_count = retry_count
-        self.session = requests.Session()
 
     def _request(
         self,
@@ -140,18 +141,19 @@ class ApiClient:
         last_error = None
         for attempt in range(self.retry_count):
             try:
+                session = self.session
                 if method.upper() == "GET":
-                    response = self.session.get(
+                    response = session.get(
                         url, headers=request_headers,
                         params=params, timeout=self.timeout
                     )
                 elif method.upper() == "POST":
-                    response = self.session.post(
+                    response = session.post(
                         url, headers=request_headers,
                         json=data, params=params, timeout=self.timeout
                     )
                 elif method.upper() == "DELETE":
-                    response = self.session.delete(
+                    response = session.delete(
                         url, headers=request_headers,
                         json=data, params=params, timeout=self.timeout
                     )

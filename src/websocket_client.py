@@ -423,13 +423,7 @@ class MarketWebSocket:
             snapshot = OrderbookSnapshot.from_message(data)
             self._orderbooks[snapshot.asset_id] = snapshot
             logger.debug(f"Book update for {snapshot.asset_id[:20]}...: mid={snapshot.mid_price:.4f}")
-            if self._on_book:
-                try:
-                    result = self._on_book(snapshot)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception as e:
-                    logger.error(f"Error in book callback: {e}")
+            await self._run_callback(self._on_book, snapshot, label="book")
 
         elif event_type == "price_change":
             market = data.get("market", "")
@@ -437,31 +431,16 @@ class MarketWebSocket:
                 PriceChange.from_dict(pc)
                 for pc in data.get("price_changes", [])
             ]
-            # Update orderbook cache with price changes
-            for change in changes:
-                if change.asset_id in self._orderbooks:
-                    ob = self._orderbooks[change.asset_id]
-                    # Update best bid/ask from price change
-                    if change.best_bid > 0:
-                        # Simple update - for full accuracy would need to rebuild levels
-                        pass
-            if self._on_price_change:
-                try:
-                    result = self._on_price_change(market, changes)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception as e:
-                    logger.error(f"Error in price_change callback: {e}")
+            await self._run_callback(
+                self._on_price_change,
+                market,
+                changes,
+                label="price_change",
+            )
 
         elif event_type == "last_trade_price":
             trade = LastTradePrice.from_message(data)
-            if self._on_trade:
-                try:
-                    result = self._on_trade(trade)
-                    if asyncio.iscoroutine(result):
-                        await result
-                except Exception as e:
-                    logger.error(f"Error in trade callback: {e}")
+            await self._run_callback(self._on_trade, trade, label="trade")
 
         elif event_type == "tick_size_change":
             # Log but don't handle specially
@@ -469,6 +448,17 @@ class MarketWebSocket:
 
         else:
             logger.debug(f"Unknown event type: {event_type}")
+
+    async def _run_callback(self, callback: Optional[Callable[..., Any]], *args: Any, label: str) -> None:
+        """Run a callback that may be sync or async, logging failures."""
+        if not callback:
+            return
+        try:
+            result = callback(*args)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            logger.error(f"Error in {label} callback: {e}")
 
     async def _run_loop(self) -> None:
         """Main message processing loop."""

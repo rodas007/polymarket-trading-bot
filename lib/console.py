@@ -15,7 +15,6 @@ Usage:
 """
 
 from datetime import datetime
-from typing import Optional
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -77,14 +76,7 @@ def log(msg: str, level: str = "info", show_timestamp: bool = True) -> str:
     Returns:
         Formatted message string
     """
-    symbol, color = LOG_SYMBOLS.get(level, ("·", ""))
-
-    if show_timestamp:
-        ts = get_timestamp()
-        formatted = f"{Colors.CYAN}[{ts}]{Colors.RESET} {color}{symbol}{Colors.RESET} {msg}"
-    else:
-        formatted = f"{color}{symbol}{Colors.RESET} {msg}"
-
+    formatted = format_log(msg, level, show_timestamp)
     print(formatted)
     return formatted
 

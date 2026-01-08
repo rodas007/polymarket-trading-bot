@@ -12,13 +12,14 @@ Example:
     print(market["slug"], market["clobTokenIds"])
 """
 
-import time
-import requests
+import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 
+from .http import ThreadLocalSessionMixin
 
-class GammaClient:
+
+class GammaClient(ThreadLocalSessionMixin):
     """
     Client for Polymarket's Gamma API.
 
@@ -43,9 +44,9 @@ class GammaClient:
             host: Gamma API host URL
             timeout: Request timeout in seconds
         """
+        super().__init__()
         self.host = host.rstrip("/")
         self.timeout = timeout
-        self.session = requests.Session()
 
     def get_market_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """
@@ -155,24 +156,13 @@ class GammaClient:
         Returns:
             Dictionary with "up" and "down" token IDs
         """
-        import json
-
         clob_token_ids = market.get("clobTokenIds", "[]")
-        if isinstance(clob_token_ids, str):
-            token_ids = json.loads(clob_token_ids)
-        else:
-            token_ids = clob_token_ids
+        token_ids = self._parse_json_field(clob_token_ids)
 
         outcomes = market.get("outcomes", '["Up", "Down"]')
-        if isinstance(outcomes, str):
-            outcomes = json.loads(outcomes)
+        outcomes = self._parse_json_field(outcomes)
 
-        result = {}
-        for i, outcome in enumerate(outcomes):
-            if i < len(token_ids):
-                result[outcome.lower()] = token_ids[i]
-
-        return result
+        return self._map_outcomes(outcomes, token_ids)
 
     def parse_prices(self, market: Dict[str, Any]) -> Dict[str, float]:
         """
@@ -184,23 +174,32 @@ class GammaClient:
         Returns:
             Dictionary with "up" and "down" prices
         """
-        import json
-
         outcome_prices = market.get("outcomePrices", '["0.5", "0.5"]')
-        if isinstance(outcome_prices, str):
-            prices = json.loads(outcome_prices)
-        else:
-            prices = outcome_prices
+        prices = self._parse_json_field(outcome_prices)
 
         outcomes = market.get("outcomes", '["Up", "Down"]')
-        if isinstance(outcomes, str):
-            outcomes = json.loads(outcomes)
+        outcomes = self._parse_json_field(outcomes)
 
-        result = {}
+        return self._map_outcomes(outcomes, prices, cast=float)
+
+    @staticmethod
+    def _parse_json_field(value: Any) -> List[Any]:
+        """Parse a field that may be a JSON string or a list."""
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
+
+    @staticmethod
+    def _map_outcomes(
+        outcomes: List[Any],
+        values: List[Any],
+        cast=lambda v: v
+    ) -> Dict[str, Any]:
+        """Map outcome labels to values with optional casting."""
+        result: Dict[str, Any] = {}
         for i, outcome in enumerate(outcomes):
-            if i < len(prices):
-                result[outcome.lower()] = float(prices[i])
-
+            if i < len(values):
+                result[str(outcome).lower()] = cast(values[i])
         return result
 
     def get_market_info(self, coin: str) -> Optional[Dict[str, Any]]:
