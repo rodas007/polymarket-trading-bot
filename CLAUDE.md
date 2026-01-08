@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Python trading bot for Polymarket with gasless transactions via Builder Program. Uses EIP-712 signing for orders, encrypted private key storage, and supports both the CLOB API and Relayer API.
+A beginner-friendly Python trading bot for Polymarket with gasless transactions via Builder Program. Uses EIP-712 signing for orders, encrypted private key storage, and supports both the CLOB API and Relayer API.
 
 ## Common Commands
 
@@ -14,6 +14,9 @@ pip install -r requirements.txt
 cp .env.example .env  # Edit with your credentials
 source .env
 
+# Run quickstart example
+python examples/quickstart.py
+
 # Run full integration test
 python scripts/full_test.py
 
@@ -22,23 +25,53 @@ python scripts/run_bot.py              # Quick demo
 python scripts/run_bot.py --interactive # Interactive mode
 
 # Testing
-pytest tests/ -v                        # Run all tests
+pytest tests/ -v                        # Run all tests (89 tests)
+pytest tests/test_utils.py -v           # Test utility functions
 pytest tests/test_bot.py -v             # Test bot module
 pytest tests/test_crypto.py -v          # Test encryption
 pytest tests/test_signer.py -v          # Test EIP-712 signing
-pytest tests/test_bot.py::TestTradingBot::test_init_with_config -v  # Single test
 ```
 
 ## Architecture
 
 ```
-src/
-├── bot.py      # TradingBot - main entry point, orchestrates order flow
-├── client.py   # ClobClient (order book) + RelayerClient (gasless tx)
-├── signer.py   # EIP-712 order signing with OrderSigner
-├── crypto.py   # KeyManager - PBKDF2/Fernet encryption for private keys
-└── config.py   # Config dataclasses, YAML loading, validation
+┌─────────────────────────────────────────────────────────────┐
+│                         TradingBot                          │
+│                        (bot.py)                             │
+│  - High-level trading interface                             │
+│  - Async order operations                                   │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+         ┌────────────┼────────────┐
+         ▼            ▼            ▼
+┌─────────────┐ ┌───────────┐ ┌───────────────┐
+│ OrderSigner │ │ ClobClient│ │ RelayerClient │
+│ (signer.py) │ │(client.py)│ │ (client.py)   │
+│             │ │           │ │               │
+│ EIP-712     │ │ Order     │ │ Gasless       │
+│ signatures  │ │ submission│ │ transactions  │
+└──────┬──────┘ └─────┬─────┘ └───────────────┘
+       │              │
+       ▼              ▼
+┌─────────────┐ ┌───────────┐
+│ KeyManager  │ │  Config   │
+│ (crypto.py) │ │(config.py)│
+│             │ │           │
+│ PBKDF2 +    │ │ YAML/ENV  │
+│ Fernet      │ │ loading   │
+└─────────────┘ └───────────┘
 ```
+
+### Module Responsibilities
+
+| Module | Purpose | Key Classes |
+|--------|---------|-------------|
+| `bot.py` | Main trading interface | `TradingBot`, `OrderResult` |
+| `client.py` | API communication | `ClobClient`, `RelayerClient` |
+| `signer.py` | EIP-712 signing | `OrderSigner`, `Order` |
+| `crypto.py` | Key encryption | `KeyManager` |
+| `config.py` | Configuration | `Config`, `BuilderConfig` |
+| `utils.py` | Helper functions | `create_bot_from_env`, `validate_address` |
 
 ### Data Flow
 
@@ -47,7 +80,7 @@ src/
 3. `ClobClient.post_order()` submits to CLOB with Builder HMAC auth headers
 4. If gasless enabled, `RelayerClient` handles Safe deployment/approvals
 
-### Key Patterns
+## Key Patterns
 
 - **Async methods**: All trading operations (`place_order`, `cancel_order`, `get_trades`) are async
 - **Config precedence**: Environment vars > YAML file > defaults
@@ -56,7 +89,20 @@ src/
 
 ## Configuration
 
-Config loads from `config.yaml` with these key fields:
+Config loads from `config.yaml` or environment variables:
+
+```python
+# From environment
+config = Config.from_env()
+
+# From YAML
+config = Config.load("config.yaml")
+
+# With env overrides
+config = Config.load_with_env("config.yaml")
+```
+
+Key fields:
 - `safe_address`: Your Polymarket proxy wallet address
 - `builder.api_key/api_secret/api_passphrase`: For gasless trading
 - `clob.chain_id`: 137 (Polygon mainnet)
@@ -71,9 +117,11 @@ Config loads from `config.yaml` with these key fields:
 
 ## Dependencies
 
-- `eth-account>=0.13.0`: Uses new `encode_typed_data` API with `domain_data`, `message_types`, `message_data` params
-- `web3>=7.0.0`: Polygon RPC interactions
+- `eth-account>=0.13.0`: Uses new `encode_typed_data` API
+- `web3>=6.0.0`: Polygon RPC interactions
 - `cryptography`: Fernet encryption for private keys
+- `pyyaml`: YAML config file support
+- `python-dotenv`: .env file loading
 
 ## Polymarket API Context
 
@@ -82,3 +130,11 @@ Config loads from `config.yaml` with these key fields:
 - Token IDs are ERC-1155 identifiers for market outcomes
 - Prices are 0-1 (probability percentages)
 - USDC has 6 decimal places
+
+## For Beginners
+
+Start with these files in order:
+1. `examples/quickstart.py` - Simplest possible example
+2. `examples/basic_trading.py` - Common operations
+3. `src/bot.py` - Read the TradingBot class
+4. `examples/strategy_example.py` - Custom strategy framework

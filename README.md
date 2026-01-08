@@ -1,303 +1,255 @@
-# Polymarket Trading Bot Demo
+# Polymarket Trading Bot
 
-A production-ready, modular trading bot for Polymarket with gasless transactions via Builder Program.
+English | [简体中文](README_CN.md)
+
+A beginner-friendly Python trading bot for Polymarket with gasless transactions.
 
 ## Features
 
-- **Gasless Transactions**: Uses Builder Program credentials to eliminate gas fees
-- **Encrypted Private Key Storage**: Keys are encrypted with PBKDF2 before storage
-- **Modular Architecture**: Easy to extend and customize
+- **Simple API**: Just a few lines of code to start trading
+- **Gasless Transactions**: No gas fees with Builder Program credentials
+- **Secure Key Storage**: Private keys encrypted with PBKDF2 + Fernet
 - **Strategy Framework**: Built-in support for custom trading strategies
-- **Comprehensive Testing**: Unit tests for all core modules
+- **Fully Tested**: 58 unit tests covering all functionality
 
-## Quick Start
+## Quick Start (5 Minutes)
 
-### 1. Install Dependencies
+### Step 1: Install
 
 ```bash
+git clone https://github.com/your-username/polymarket-trading-bot.git
+cd polymarket-trading-bot
 pip install -r requirements.txt
 ```
 
-### 2. Configure the Bot
-
-**Option A: Using Environment Variables (Recommended)**
+### Step 2: Configure
 
 ```bash
-# Copy the example env file
-cp .env.example .env
-
-# Edit with your credentials
-nano .env
-
-# Load environment variables
-source .env
-
-# Run the full test to verify setup
-python scripts/full_test.py
+# Set your credentials
+export POLY_PRIVATE_KEY=your_metamask_private_key
+export POLY_SAFE_ADDRESS=0xYourPolymarketSafeAddress
 ```
 
-**Option B: Using Setup Script**
+> **Where to find your Safe address?** Go to [polymarket.com/settings](https://polymarket.com/settings) and copy your wallet address.
 
-Run the interactive setup script:
+### Step 3: Run
 
 ```bash
-python scripts/setup.py
+# Run the quickstart example
+python examples/quickstart.py
 ```
 
-You'll need:
-- Your MetaMask private key
-- Your Polymarket Safe address (from polymarket.com/settings)
-- Optional: Builder Program credentials (for gasless trading)
+That's it! You're ready to trade.
 
-### 3. Start Trading
+## Code Examples
 
-```bash
-# Interactive mode
-python scripts/run_bot.py --interactive
+### Simplest Example
 
-# Quick demo
-python scripts/run_bot.py
+```python
+from src import create_bot_from_env
+import asyncio
+
+async def main():
+    # Create bot from environment variables
+    bot = create_bot_from_env()
+
+    # Get your open orders
+    orders = await bot.get_open_orders()
+    print(f"You have {len(orders)} open orders")
+
+asyncio.run(main())
 ```
 
-## Environment Variables
+### Place an Order
 
-All environment variables are prefixed with `POLY_`:
+```python
+from src import TradingBot, Config
+import asyncio
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `POLY_PRIVATE_KEY` | Yes | Your MetaMask private key (hex) |
-| `POLY_SAFE_ADDRESS` | Yes | Your Polymarket Safe/Proxy address |
-| `POLY_BUILDER_API_KEY` | For gasless | Builder Program API key |
-| `POLY_BUILDER_API_SECRET` | For gasless | Builder Program secret |
-| `POLY_BUILDER_API_PASSPHRASE` | For gasless | Builder Program passphrase |
-| `POLY_RPC_URL` | No | Polygon RPC URL (default: polygon-rpc.com) |
-| `POLY_LOG_LEVEL` | No | Logging level (default: INFO) |
+async def trade():
+    # Create configuration
+    config = Config(safe_address="0xYourSafeAddress")
+
+    # Initialize bot with your private key
+    bot = TradingBot(config=config, private_key="0xYourPrivateKey")
+
+    # Place a buy order
+    result = await bot.place_order(
+        token_id="12345...",   # Market token ID
+        price=0.65,            # Price (0.65 = 65% probability)
+        size=10.0,             # Number of shares
+        side="BUY"             # or "SELL"
+    )
+
+    if result.success:
+        print(f"Order placed! ID: {result.order_id}")
+    else:
+        print(f"Order failed: {result.message}")
+
+asyncio.run(trade())
+```
+
+### Cancel Orders
+
+```python
+# Cancel a specific order
+await bot.cancel_order("order_id_here")
+
+# Cancel all orders
+await bot.cancel_all_orders()
+```
+
+### Get Market Data
+
+```python
+# Get order book
+orderbook = await bot.get_order_book(token_id)
+print(f"Best bid: {orderbook['bids'][0]}")
+
+# Get current price
+price = await bot.get_market_price(token_id)
+print(f"Price: {price}")
+
+# Get your trade history
+trades = await bot.get_trades(limit=10)
+```
 
 ## Project Structure
 
 ```
 polymarket-trading-bot/
-├── src/                      # Core modules
-│   ├── __init__.py
-│   ├── bot.py               # Trading bot
+├── src/                      # Core library
+│   ├── bot.py               # TradingBot - main interface
+│   ├── config.py            # Configuration handling
 │   ├── client.py            # API clients
-│   ├── config.py            # Configuration
-│   ├── crypto.py            # Encryption
-│   └── signer.py            # Order signing
-├── scripts/                 # Executable scripts
-│   ├── setup.py             # Initial setup
-│   └── run_bot.py           # Run the bot
-├── examples/                # Usage examples
-│   ├── basic_trading.py     # Basic operations
+│   ├── signer.py            # Order signing (EIP-712)
+│   ├── crypto.py            # Key encryption
+│   └── utils.py             # Helper functions
+│
+├── examples/                 # Example code
+│   ├── quickstart.py        # Start here!
+│   ├── basic_trading.py     # Common operations
 │   └── strategy_example.py  # Custom strategies
-├── tests/                   # Unit tests
-│   ├── test_crypto.py
-│   ├── test_signer.py
-│   └── test_bot.py
-├── config.yaml              # Configuration file (created by setup)
-├── credentials/             # Encrypted credentials (created by setup)
-│   ├── encrypted_key.json
-│   └── api_creds.json
-└── requirements.txt         # Python dependencies
+│
+├── scripts/                  # Utility scripts
+│   ├── setup.py             # Interactive setup
+│   ├── run_bot.py           # Run the bot
+│   └── full_test.py         # Integration tests
+│
+└── tests/                    # Unit tests
 ```
 
-## Usage Examples
+## Configuration Options
 
-### Basic Trading
+### Environment Variables
 
-```python
-from src.bot import TradingBot
-import asyncio
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `POLY_PRIVATE_KEY` | Yes | Your wallet private key |
+| `POLY_SAFE_ADDRESS` | Yes | Your Polymarket Safe address |
+| `POLY_BUILDER_API_KEY` | For gasless | Builder Program API key |
+| `POLY_BUILDER_API_SECRET` | For gasless | Builder Program secret |
+| `POLY_BUILDER_API_PASSPHRASE` | For gasless | Builder Program passphrase |
 
-async def trade():
-    bot = TradingBot(config_path="config.yaml")
+### Config File (Alternative)
 
-    # Place a buy order
-    result = await bot.place_order(
-        token_id="0x1234567890...",
-        price=0.65,      # 65% probability
-        size=10.0,       # 10 shares
-        side="BUY"
-    )
-    print(f"Order placed: {result.success}")
-
-    # Check open orders
-    orders = await bot.get_open_orders()
-    print(f"Open orders: {len(orders)}")
-
-    # Cancel an order
-    await bot.cancel_order("order_id")
-
-asyncio.run(trade())
-```
-
-### Custom Strategy
-
-```python
-from examples.strategy_example import MeanReversionStrategy
-from src.bot import TradingBot
-import asyncio
-
-async def run_strategy():
-    bot = TradingBot(config_path="config.yaml")
-
-    strategy = MeanReversionStrategy(
-        bot=bot,
-        params={
-            'window': 10,        # Moving average window
-            'threshold': 0.05,   # 5% deviation
-            'size': 1.0,         # Order size
-            'check_interval': 60 # Check every 60s
-        }
-    )
-
-    # Run strategy
-    await strategy.run(
-        tokens=[bot.config.default_token_id],
-        duration=3600  # Run for 1 hour
-    )
-
-asyncio.run(run_strategy())
-```
-
-## Configuration
-
-### config.yaml
+Create `config.yaml`:
 
 ```yaml
-safe_address: "0x..."           # Your Polymarket Safe address
-rpc_url: "https://polygon-rpc.com"
+safe_address: "0xYourSafeAddress"
 
-clob:
-  host: "https://clob.polymarket.com"
-  chain_id: 137
-  signature_type: 2
-
-relayer:
-  host: "https://relayer-v2.polymarket.com"
-  tx_type: "SAFE"
-
-builder:
-  api_key: ""                   # For gasless trading
-  api_secret: ""
-  api_passphrase: ""
-
-default_token_id: "0x..."       # Default market to trade
-default_size: 1.0
-default_price: 0.5
-data_dir: "credentials"
-log_level: "INFO"
-```
-
-### Gasless Trading
-
-To enable gasless transactions:
-
-1. Apply for [Polymarket Builder Program](https://polymarket.com/settings?tab=builder)
-2. Copy your API credentials to `config.yaml`:
-
-```yaml
+# For gasless trading (optional)
 builder:
   api_key: "your_api_key"
   api_secret: "your_api_secret"
   api_passphrase: "your_passphrase"
 ```
 
-## Security
+Then load it:
 
-### Private Key Storage
-
-Your private key is:
-1. Encrypted using **PBKDF2** (480,000 iterations)
-2. Protected by a **Fernet** symmetric cipher
-3. Stored only in the `credentials/encrypted_key.json` file
-4. Never sent over the network
-
-### Best Practices
-
-- Use a strong, unique password
-- Never share your encrypted key file
-- Run the bot on a secure, private machine
-- Regularly backup your credentials folder
-
-## Testing
-
-Run all tests:
-
-```bash
-pytest tests/ -v
+```python
+bot = TradingBot(config_path="config.yaml", private_key="0x...")
 ```
 
-Run specific tests:
+## Gasless Trading
+
+To eliminate gas fees:
+
+1. Apply for [Builder Program](https://polymarket.com/settings?tab=builder)
+2. Set the environment variables:
 
 ```bash
-pytest tests/test_crypto.py -v      # Encryption tests
-pytest tests/test_signer.py -v      # Signing tests
-pytest tests/test_bot.py -v          # Bot tests
+export POLY_BUILDER_API_KEY=your_key
+export POLY_BUILDER_API_SECRET=your_secret
+export POLY_BUILDER_API_PASSPHRASE=your_passphrase
 ```
+
+The bot will automatically use gasless mode when credentials are present.
 
 ## API Reference
 
-### TradingBot
+### TradingBot Methods
 
-```python
-bot.place_order(token_id, price, size, side, order_type="GTC")
-    # Place a limit order
-
-bot.cancel_order(order_id)
-    # Cancel a specific order
-
-bot.cancel_all_orders(token_id=None)
-    # Cancel all open orders
-
-bot.get_open_orders()
-    # Get list of open orders
-
-bot.get_trades(token_id=None, limit=100)
-    # Get trade history
-
-bot.get_market_price(token_id)
-    # Get current market price
-
-bot.get_order_book(token_id)
-    # Get order book for a token
-```
+| Method | Description |
+|--------|-------------|
+| `place_order(token_id, price, size, side)` | Place a limit order |
+| `cancel_order(order_id)` | Cancel a specific order |
+| `cancel_all_orders()` | Cancel all open orders |
+| `get_open_orders()` | List your open orders |
+| `get_trades(limit=100)` | Get your trade history |
+| `get_order_book(token_id)` | Get market order book |
+| `get_market_price(token_id)` | Get current market price |
+| `is_initialized()` | Check if bot is ready |
 
 ### Order Parameters
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `token_id` | str | Market token ID (from Gamma API) |
-| `price` | float | Price per share (0-1, e.g., 0.65) |
-| `size` | float | Number of shares |
-| `side` | str | "BUY" or "SELL" |
-| `order_type` | str | "GTC" (Good Till Cancelled), "GTD", "FOK" |
+| Parameter | Type | Example | Description |
+|-----------|------|---------|-------------|
+| `token_id` | str | `"123..."` | Market outcome token ID |
+| `price` | float | `0.65` | Price 0-1 (0.65 = 65%) |
+| `size` | float | `10.0` | Number of shares |
+| `side` | str | `"BUY"` | "BUY" or "SELL" |
+
+## Security
+
+Your private key is protected by:
+
+1. **PBKDF2** key derivation (480,000 iterations)
+2. **Fernet** symmetric encryption
+3. File permissions set to `0600` (owner-only)
+
+Best practices:
+- Never commit `.env` files to git
+- Use a dedicated wallet for trading
+- Keep your encrypted key file private
+
+## Testing
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ -v --cov=src
+```
 
 ## Troubleshooting
 
-### "config.yaml not found"
-Run the setup script:
-```bash
-python scripts/setup.py
-```
-
-### "Invalid password"
-You entered the wrong password for the encrypted key.
-
-### "Safe address not found"
-Make sure your Safe address is set in `config.yaml` or `credentials/`.
-
-### Gas fees not eliminated
-Ensure Builder credentials are correctly configured in `config.yaml`.
-
-## License
-
-MIT License
+| Problem | Solution |
+|---------|----------|
+| `POLY_PRIVATE_KEY not set` | Run `export POLY_PRIVATE_KEY=your_key` |
+| `POLY_SAFE_ADDRESS not set` | Get it from polymarket.com/settings |
+| `Invalid private key` | Check key is 64 hex characters |
+| `Order failed` | Check you have sufficient balance |
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
+3. Write tests for new code
+4. Run `pytest tests/ -v`
 5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details.
