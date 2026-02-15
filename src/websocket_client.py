@@ -340,17 +340,17 @@ class MarketWebSocket:
         if not asset_ids:
             return False
 
+        old_assets = list(self._subscribed_assets)
         if replace:
-            # Clear old subscriptions and cached data
-            self._subscribed_assets.clear()
+            # Clear cached orderbooks; subscriptions will be replaced on server side
             self._orderbooks.clear()
 
-        self._subscribed_assets.update(asset_ids)
-        logger.info(f"subscribe() called with {len(asset_ids)} assets, is_connected={self.is_connected}, ws={self._ws is not None}")
+        logger.info(f"subscribe() called with {len(asset_ids)} assets, replace={replace}, is_connected={self.is_connected}, ws={self._ws is not None}")
 
         if not self.is_connected:
             # Will subscribe after connect
             logger.info("Not connected yet, will subscribe after connect")
+            self._subscribed_assets = set(asset_ids)
             return True
 
         subscribe_msg = {
@@ -359,9 +359,18 @@ class MarketWebSocket:
         }
 
         try:
+            if replace and old_assets:
+                unsubscribe_msg = {
+                    "assets_ids": old_assets,
+                    "type": "market",
+                    "operation": "unsubscribe",
+                }
+                await self._ws.send(json.dumps(unsubscribe_msg))
+
             msg_json = json.dumps(subscribe_msg)
             logger.info(f"Sending subscribe message: {msg_json[:200]}")
             await self._ws.send(msg_json)
+            self._subscribed_assets = set(asset_ids)
             logger.info(f"Subscribed to {len(asset_ids)} assets successfully")
             return True
         except Exception as e:
