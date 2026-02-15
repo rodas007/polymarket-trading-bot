@@ -355,7 +355,7 @@ class MarketWebSocket:
 
         subscribe_msg = {
             "assets_ids": asset_ids,
-            "type": "MARKET",
+            "type": "market",
         }
 
         try:
@@ -390,7 +390,7 @@ class MarketWebSocket:
 
         subscribe_msg = {
             "assets_ids": asset_ids,
-            "operation": "subscribe",
+            "type": "market",
         }
 
         try:
@@ -418,6 +418,7 @@ class MarketWebSocket:
 
         unsubscribe_msg = {
             "assets_ids": asset_ids,
+            "type": "market",
             "operation": "unsubscribe",
         }
 
