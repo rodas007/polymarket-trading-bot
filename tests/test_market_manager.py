@@ -59,3 +59,28 @@ def test_should_switch_with_end_date_fallback():
     )
 
     assert manager._should_switch_market(old_market, new_market) is True
+
+
+def test_discover_market_uses_configured_interval(monkeypatch):
+    manager = MarketManager(coin="BTC", interval_minutes=5)
+
+    captured = {}
+
+    def fake_get_market_info(coin, interval_minutes=15):
+        captured["coin"] = coin
+        captured["interval_minutes"] = interval_minutes
+        return {
+            "slug": "btc-updown-5m-1000",
+            "question": "Q",
+            "end_date": "2025-01-01T00:05:00Z",
+            "token_ids": {"up": "1", "down": "2"},
+            "prices": {"up": 0.5, "down": 0.5},
+            "accepting_orders": True,
+        }
+
+    monkeypatch.setattr(manager.gamma, "get_market_info", fake_get_market_info)
+
+    market = manager.discover_market(update_state=False)
+
+    assert market is not None
+    assert captured == {"coin": "BTC", "interval_minutes": 5}
