@@ -2,13 +2,13 @@
 Gamma API Client - Market Discovery for Polymarket
 
 Provides access to the Gamma API for discovering active markets,
-including 15-minute Up/Down markets for crypto assets.
+including 5-minute and 15-minute Up/Down markets for crypto assets.
 
 Example:
     from src.gamma_client import GammaClient
 
     client = GammaClient()
-    market = client.get_current_15m_market("ETH")
+    market = client.get_current_market("ETH", interval_minutes=15)
     print(market["slug"], market["clobTokenIds"])
 """
 
@@ -28,12 +28,20 @@ class GammaClient(ThreadLocalSessionMixin):
 
     DEFAULT_HOST = "https://gamma-api.polymarket.com"
 
-    # Supported coins and their slug prefixes
-    COIN_SLUGS = {
-        "BTC": "btc-updown-15m",
-        "ETH": "eth-updown-15m",
-        "SOL": "sol-updown-15m",
-        "XRP": "xrp-updown-15m",
+    # Supported coin slug prefixes by interval
+    COIN_SLUGS_BY_INTERVAL = {
+        15: {
+            "BTC": "btc-updown-15m",
+            "ETH": "eth-updown-15m",
+            "SOL": "sol-updown-15m",
+            "XRP": "xrp-updown-15m",
+        },
+        5: {
+            "BTC": "btc-updown-5m",
+            "ETH": "eth-updown-5m",
+            "SOL": "sol-updown-5m",
+            "XRP": "xrp-updown-5m",
+        },
     }
 
     def __init__(self, host: str = DEFAULT_HOST, timeout: int = 10):
@@ -68,83 +76,52 @@ class GammaClient(ThreadLocalSessionMixin):
         except Exception:
             return None
 
-    def get_current_15m_market(self, coin: str) -> Optional[Dict[str, Any]]:
-        """
-        Get the current active 15-minute market for a coin.
-
-        Args:
-            coin: Coin symbol (BTC, ETH, SOL, XRP)
-
-        Returns:
-            Market data for the current 15-minute window, or None
-        """
+    def _get_coin_slug_prefix(self, coin: str, interval_minutes: int) -> str:
+        """Get slug prefix for a coin and interval."""
         coin = coin.upper()
-        if coin not in self.COIN_SLUGS:
-            raise ValueError(f"Unsupported coin: {coin}. Use: {list(self.COIN_SLUGS.keys())}")
+        mapping = self.COIN_SLUGS_BY_INTERVAL.get(interval_minutes, {})
+        if coin not in mapping:
+            supported = sorted(mapping.keys())
+            raise ValueError(
+                f"Unsupported market for coin={coin}, interval={interval_minutes}m. "
+                f"Supported for this interval: {supported}"
+            )
+        return mapping[coin]
 
-        prefix = self.COIN_SLUGS[coin]
-
-        # Calculate current and next 15-minute window timestamps
+    def get_current_market(self, coin: str, interval_minutes: int = 15) -> Optional[Dict[str, Any]]:
+        """Get the current active market for a coin/interval."""
+        prefix = self._get_coin_slug_prefix(coin, interval_minutes)
         now = datetime.now(timezone.utc)
+        interval_seconds = interval_minutes * 60
 
-        # Round to current 15-minute window
-        minute = (now.minute // 15) * 15
-        current_window = now.replace(minute=minute, second=0, microsecond=0)
-        current_ts = int(current_window.timestamp())
+        current_ts = int(now.timestamp() // interval_seconds * interval_seconds)
 
-        # Try current window
-        slug = f"{prefix}-{current_ts}"
-        market = self.get_market_by_slug(slug)
-
-        if market and market.get("acceptingOrders"):
-            return market
-
-        # Try next window (in case current just ended)
-        next_ts = current_ts + 900  # 15 minutes
-        slug = f"{prefix}-{next_ts}"
-        market = self.get_market_by_slug(slug)
-
-        if market and market.get("acceptingOrders"):
-            return market
-
-        # Try previous window (might still be active)
-        prev_ts = current_ts - 900
-        slug = f"{prefix}-{prev_ts}"
-        market = self.get_market_by_slug(slug)
-
-        if market and market.get("acceptingOrders"):
-            return market
+        # Try current, next, then previous window
+        for ts in (current_ts, current_ts + interval_seconds, current_ts - interval_seconds):
+            slug = f"{prefix}-{ts}"
+            market = self.get_market_by_slug(slug)
+            if market and market.get("acceptingOrders"):
+                return market
 
         return None
 
-    def get_next_15m_market(self, coin: str) -> Optional[Dict[str, Any]]:
-        """
-        Get the next upcoming 15-minute market for a coin.
-
-        Args:
-            coin: Coin symbol (BTC, ETH, SOL, XRP)
-
-        Returns:
-            Market data for the next 15-minute window, or None
-        """
-        coin = coin.upper()
-        if coin not in self.COIN_SLUGS:
-            raise ValueError(f"Unsupported coin: {coin}")
-
-        prefix = self.COIN_SLUGS[coin]
+    def get_next_market(self, coin: str, interval_minutes: int = 15) -> Optional[Dict[str, Any]]:
+        """Get the next upcoming market for a coin/interval."""
+        prefix = self._get_coin_slug_prefix(coin, interval_minutes)
         now = datetime.now(timezone.utc)
-
-        # Calculate next 15-minute window
-        minute = ((now.minute // 15) + 1) * 15
-        if minute >= 60:
-            next_window = now.replace(hour=now.hour + 1, minute=0, second=0, microsecond=0)
-        else:
-            next_window = now.replace(minute=minute, second=0, microsecond=0)
-
-        next_ts = int(next_window.timestamp())
+        interval_seconds = interval_minutes * 60
+        current_ts = int(now.timestamp() // interval_seconds * interval_seconds)
+        next_ts = current_ts + interval_seconds
         slug = f"{prefix}-{next_ts}"
-
         return self.get_market_by_slug(slug)
+
+    def get_current_15m_market(self, coin: str) -> Optional[Dict[str, Any]]:
+        """Backward-compatible helper for 15-minute markets."""
+        return self.get_current_market(coin, interval_minutes=15)
+
+    def get_next_15m_market(self, coin: str) -> Optional[Dict[str, Any]]:
+        """Backward-compatible helper for next 15-minute market."""
+        return self.get_next_market(coin, interval_minutes=15)
 
     def parse_token_ids(self, market: Dict[str, Any]) -> Dict[str, str]:
         """
@@ -202,17 +179,9 @@ class GammaClient(ThreadLocalSessionMixin):
                 result[str(outcome).lower()] = cast(values[i])
         return result
 
-    def get_market_info(self, coin: str) -> Optional[Dict[str, Any]]:
-        """
-        Get comprehensive market info for current 15-minute market.
-
-        Args:
-            coin: Coin symbol
-
-        Returns:
-            Dictionary with market info including token IDs and prices
-        """
-        market = self.get_current_15m_market(coin)
+    def get_market_info(self, coin: str, interval_minutes: int = 15) -> Optional[Dict[str, Any]]:
+        """Get comprehensive market info for current coin/interval market."""
+        market = self.get_current_market(coin, interval_minutes=interval_minutes)
         if not market:
             return None
 
