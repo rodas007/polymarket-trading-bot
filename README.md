@@ -145,12 +145,6 @@ What this does:
 - Uses supervisor restart loop on fatal errors (`--reconnect-delay`, default 10s).
 - Keeps the same 24h window using saved end timestamp, so you can evaluate performance for the full trial period.
 
-
-Troubleshooting (if you only see `--` in bid/ask for several minutes):
-- Run with `--debug` to confirm WebSocket subscription/connect logs.
-- Make sure you are on latest code where market WS subscription uses `type: "market"`.
-- Try switching interval (`--interval 5` or `--interval 15`) and coin to validate data flow.
-
 **Strategy Logic:**
 1. Auto-discover current market for selected interval (5m/15m)
 2. Monitor orderbook prices via WebSocket in real-time
