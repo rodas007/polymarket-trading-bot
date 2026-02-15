@@ -67,8 +67,7 @@ def parse_args():
     parser.add_argument("--no-resume", action="store_true", help="Do not resume demo state if state file exists")
     parser.add_argument("--reconnect-delay", type=int, default=10, help="Seconds before restarting after fatal error")
 
-    parser.add_argument("--debug", action="store_true", help="Enable app debug logging")
-    parser.add_argument("--debug-ws", action="store_true", help="Enable verbose websocket event logs (very noisy)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
 
@@ -131,9 +130,7 @@ def main():
 
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
-
-    # Keep websocket logs quiet by default so TUI stays readable
-    logging.getLogger("src.websocket_client").setLevel(logging.DEBUG if args.debug_ws else logging.WARNING)
+        logging.getLogger("src.websocket_client").setLevel(logging.DEBUG)
 
     print_config(args)
 
