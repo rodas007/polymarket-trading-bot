@@ -1,95 +1,77 @@
 #!/usr/bin/env python3
-"""
-Flash Crash Strategy Runner
+"""Flash Crash Strategy Runner."""
 
-Entry point for running the flash crash strategy.
-
-Usage:
-    python apps/run_flash_crash.py --coin ETH
-    python apps/run_flash_crash.py --coin BTC --size 10
-    python apps/run_flash_crash.py --coin BTC --drop 0.25
-"""
-
+import argparse
+import asyncio
+import logging
 import os
 import sys
-import asyncio
-import argparse
-import logging
+import time
+import uuid
 from pathlib import Path
 
-# Suppress noisy logs
 logging.getLogger("src.websocket_client").setLevel(logging.WARNING)
 logging.getLogger("src.bot").setLevel(logging.WARNING)
 
-# Auto-load .env file
 from dotenv import load_dotenv
+
 load_dotenv()
 
-# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.console import Colors
-from src.bot import TradingBot
+from src.bot import OrderResult, TradingBot
 from src.config import Config
-from strategies.flash_crash import FlashCrashStrategy, FlashCrashConfig
+from strategies.flash_crash import (
+    DemoFlashCrashConfig,
+    DemoFlashCrashStrategy,
+    FlashCrashConfig,
+    FlashCrashStrategy,
+)
 
 
-def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Flash Crash Strategy for Polymarket 15-minute markets"
-    )
-    parser.add_argument(
-        "--coin",
-        type=str,
-        default="ETH",
-        choices=["BTC", "ETH", "SOL", "XRP"],
-        help="Coin to trade (default: ETH)"
-    )
-    parser.add_argument(
-        "--size",
-        type=float,
-        default=5.0,
-        help="Trade size in USDC (default: 5.0)"
-    )
-    parser.add_argument(
-        "--drop",
-        type=float,
-        default=0.30,
-        help="Drop threshold as absolute probability change (default: 0.30)"
-    )
-    parser.add_argument(
-        "--lookback",
-        type=int,
-        default=10,
-        help="Lookback window in seconds (default: 10)"
-    )
-    parser.add_argument(
-        "--take-profit",
-        type=float,
-        default=0.10,
-        help="Take profit in dollars (default: 0.10)"
-    )
-    parser.add_argument(
-        "--stop-loss",
-        type=float,
-        default=0.05,
-        help="Stop loss in dollars (default: 0.05)"
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging"
-    )
+class PaperTradingBot:
+    """Minimal bot interface for demo/paper mode."""
 
-    args = parser.parse_args()
+    def is_initialized(self) -> bool:
+        return True
 
-    # Enable debug logging if requested
-    if args.debug:
-        logging.basicConfig(level=logging.DEBUG)
-        logging.getLogger("src.websocket_client").setLevel(logging.DEBUG)
+    async def place_order(self, token_id: str, price: float, size: float, side: str) -> OrderResult:
+        return OrderResult(
+            success=True,
+            order_id=f"paper-{side.lower()}-{uuid.uuid4().hex[:8]}",
+            status="filled",
+            message="paper order simulated",
+            data={"token_id": token_id, "price": price, "size": size, "side": side},
+        )
 
-    # Check environment
+    async def get_open_orders(self):
+        return []
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Flash Crash Strategy for Polymarket 5m/15m markets")
+    parser.add_argument("--coin", type=str, default="ETH", choices=["BTC", "ETH", "SOL", "XRP"], help="Coin to trade")
+    parser.add_argument("--interval", type=int, default=15, choices=[5, 15], help="Market interval in minutes")
+    parser.add_argument("--size", type=float, default=5.0, help="Trade size in USDC")
+    parser.add_argument("--drop", type=float, default=0.30, help="Drop threshold as absolute probability change")
+    parser.add_argument("--lookback", type=int, default=10, help="Lookback window in seconds")
+    parser.add_argument("--take-profit", type=float, default=0.10, help="Take profit in dollars")
+    parser.add_argument("--stop-loss", type=float, default=0.05, help="Stop loss in dollars")
+
+    parser.add_argument("--demo", action="store_true", help="Run in paper/demo mode (no real orders)")
+    parser.add_argument("--hours", type=float, default=24.0, help="Demo duration in hours (default: 24)")
+    parser.add_argument("--start-bankroll", type=float, default=20.0, help="Initial demo bankroll in USD")
+    parser.add_argument("--state-file", type=str, default="flash_crash_demo_state.json", help="Demo state file")
+    parser.add_argument("--reset-state", action="store_true", help="Delete saved demo state before starting")
+    parser.add_argument("--no-resume", action="store_true", help="Do not resume demo state if state file exists")
+    parser.add_argument("--reconnect-delay", type=int, default=10, help="Seconds before restarting after fatal error")
+
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    return parser.parse_args()
+
+
+def build_real_bot() -> TradingBot:
     private_key = os.environ.get("POLY_PRIVATE_KEY")
     safe_address = os.environ.get("POLY_SAFE_ADDRESS")
 
@@ -98,17 +80,88 @@ def main():
         print("Set them in .env file or export as environment variables")
         sys.exit(1)
 
-    # Create bot
     config = Config.from_env()
     bot = TradingBot(config=config, private_key=private_key)
-
     if not bot.is_initialized():
         print(f"{Colors.RED}Error: Failed to initialize bot{Colors.RESET}")
         sys.exit(1)
+    return bot
 
-    # Create strategy config
-    strategy_config = FlashCrashConfig(
+
+def print_config(args):
+    print(f"\n{Colors.BOLD}{'='*60}{Colors.RESET}")
+    mode = "DEMO" if args.demo else "LIVE"
+    print(f"{Colors.BOLD}  Flash Crash Strategy [{mode}] - {args.coin.upper()} {args.interval}m{Colors.RESET}")
+    print(f"{Colors.BOLD}{'='*60}{Colors.RESET}\n")
+
+    print("Configuration:")
+    print(f"  Coin: {args.coin.upper()}")
+    print(f"  Interval: {args.interval}m")
+    print(f"  Size: ${args.size:.2f}")
+    print(f"  Drop threshold: {args.drop:.2f}")
+    print(f"  Lookback: {args.lookback}s")
+    print(f"  Take profit: +${args.take_profit:.2f}")
+    print(f"  Stop loss: -${args.stop_loss:.2f}")
+    if args.demo:
+        print(f"  Demo hours: {args.hours:.2f}h")
+        print(f"  Start bankroll: ${args.start_bankroll:.2f}")
+        print(f"  Resume state: {not args.no_resume}")
+        print(f"  State file: {args.state_file}")
+    print()
+
+
+def run_with_supervisor(strategy_factory, reconnect_delay: int):
+    while True:
+        try:
+            strategy = strategy_factory()
+            asyncio.run(strategy.run())
+            break
+        except KeyboardInterrupt:
+            print("\nInterrupted")
+            break
+        except Exception as e:
+            print(f"\n{Colors.RED}Fatal strategy error: {e}{Colors.RESET}")
+            print(f"Restarting in {reconnect_delay}s...")
+            time.sleep(max(1, reconnect_delay))
+
+
+def main():
+    args = parse_args()
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger("src.websocket_client").setLevel(logging.DEBUG)
+
+    print_config(args)
+
+    if args.demo:
+        bot = PaperTradingBot()
+
+        demo_cfg = DemoFlashCrashConfig(
+            coin=args.coin.upper(),
+            interval_minutes=args.interval,
+            size=args.size,
+            drop_threshold=args.drop,
+            price_lookback_seconds=args.lookback,
+            take_profit=args.take_profit,
+            stop_loss=args.stop_loss,
+            demo_hours=args.hours,
+            start_bankroll=args.start_bankroll,
+            state_file=args.state_file,
+            resume=not args.no_resume,
+            reset_state=args.reset_state,
+        )
+
+        run_with_supervisor(
+            strategy_factory=lambda: DemoFlashCrashStrategy(bot=bot, config=demo_cfg),
+            reconnect_delay=args.reconnect_delay,
+        )
+        return
+
+    bot = build_real_bot()
+    cfg = FlashCrashConfig(
         coin=args.coin.upper(),
+        interval_minutes=args.interval,
         size=args.size,
         drop_threshold=args.drop,
         price_lookback_seconds=args.lookback,
@@ -116,32 +169,10 @@ def main():
         stop_loss=args.stop_loss,
     )
 
-    # Print configuration
-    print(f"\n{Colors.BOLD}{'='*60}{Colors.RESET}")
-    print(f"{Colors.BOLD}  Flash Crash Strategy - {strategy_config.coin} 15-Minute Markets{Colors.RESET}")
-    print(f"{Colors.BOLD}{'='*60}{Colors.RESET}\n")
-
-    print(f"Configuration:")
-    print(f"  Coin: {strategy_config.coin}")
-    print(f"  Size: ${strategy_config.size:.2f}")
-    print(f"  Drop threshold: {strategy_config.drop_threshold:.2f}")
-    print(f"  Lookback: {strategy_config.price_lookback_seconds}s")
-    print(f"  Take profit: +${strategy_config.take_profit:.2f}")
-    print(f"  Stop loss: -${strategy_config.stop_loss:.2f}")
-    print()
-
-    # Create and run strategy
-    strategy = FlashCrashStrategy(bot=bot, config=strategy_config)
-
-    try:
-        asyncio.run(strategy.run())
-    except KeyboardInterrupt:
-        print("\nInterrupted")
-    except Exception as e:
-        print(f"\n{Colors.RED}Error: {e}{Colors.RESET}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    run_with_supervisor(
+        strategy_factory=lambda: FlashCrashStrategy(bot=bot, config=cfg),
+        reconnect_delay=args.reconnect_delay,
+    )
 
 
 if __name__ == "__main__":

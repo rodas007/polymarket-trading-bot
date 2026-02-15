@@ -9,7 +9,7 @@ A beginner-friendly Python trading bot for Polymarket with gasless transactions 
 - **Simple API**: Just a few lines of code to start trading
 - **Gasless Transactions**: No gas fees with Builder Program credentials
 - **Real-time WebSocket**: Live orderbook updates via WebSocket
-- **15-Minute Markets**: Built-in support for BTC/ETH/SOL/XRP 15-minute Up/Down markets
+- **5m + 15m Markets**: Built-in support for BTC/ETH/SOL/XRP 5-minute and 15-minute Up/Down markets
 - **Flash Crash Strategy**: Pre-built strategy for volatility trading
 - **Terminal UI**: Real-time orderbook display with in-place updates
 - **Secure Key Storage**: Private keys encrypted with PBKDF2 + Fernet
@@ -42,38 +42,114 @@ export POLY_SAFE_ADDRESS=0xYourPolymarketSafeAddress
 python examples/quickstart.py
 
 # Or run the Flash Crash Strategy
-python strategies/flash_crash_strategy.py --coin BTC
+python apps/run_flash_crash.py --coin BTC --interval 15
 ```
 
 That's it! You're ready to trade.
 
+## Windows Setup & Run (PowerShell)
+
+Use these exact steps on Windows:
+
+```powershell
+# 1) Clone and enter repo
+cd C:\
+git clone https://github.com/your-username/polymarket-trading-bot.git
+cd .\polymarket-trading-bot
+
+# 2) Create virtual environment
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 3) Install dependencies
+py -m pip install --upgrade pip
+py -m pip install -r requirements.txt
+
+# 4) Configure credentials in current terminal
+$env:POLY_PRIVATE_KEY = "0xYOUR_PRIVATE_KEY"
+$env:POLY_SAFE_ADDRESS = "0xYOUR_SAFE_ADDRESS"
+
+# 5) Run strategy (examples)
+# 15m BTC (live)
+py apps\run_flash_crash.py --coin BTC --interval 15
+
+# 5m ETH (demo 24h, bank 20 USD, resume state)
+py apps\run_flash_crash.py --coin ETH --interval 5 --demo --hours 24 --start-bankroll 20 --state-file .\demo_state.json
+```
+
+If PowerShell blocks venv activation, run once as admin:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
 ## Trading Strategies
+
+### Flash Crash Strategy (now supports 5m and 15m)
+
+You can run the existing strategy code with either 15-minute markets (default) or 5-minute markets (BTC/ETH/SOL/XRP).
+
+```bash
+# 15m market (default)
+python apps/run_flash_crash.py --coin BTC --interval 15
+
+# 5m market
+python apps/run_flash_crash.py --coin ETH --interval 5
+```
+
+Windows (PowerShell):
+
+```powershell
+py -m pip install -r requirements.txt
+py apps\run_flash_crash.py --coin ETH --interval 5 --size 5 --drop 0.30
+```
 
 ### Flash Crash Strategy
 
-Monitors 15-minute Up/Down markets for sudden probability drops and executes trades automatically.
+Monitors 5m/15m Up/Down markets for sudden probability drops and executes trades automatically.
 
 ```bash
-# Run with default settings (0.30 drop threshold)
-python strategies/flash_crash_strategy.py --coin BTC
+# Run with default settings (15m)
+python apps/run_flash_crash.py --coin BTC --interval 15
 
-# Custom settings
-python strategies/flash_crash_strategy.py --coin ETH --drop 0.25 --size 10
+# Run ETH 5m
+python apps/run_flash_crash.py --coin ETH --interval 5 --drop 0.25 --size 10
 
 # Available options
 --coin      BTC, ETH, SOL, XRP (default: ETH)
+--interval  5 or 15 (default: 15)
 --drop      Drop threshold as absolute change (default: 0.30)
 --size      Trade size in USDC (default: 5.0)
 --lookback  Detection window in seconds (default: 10)
 --take-profit  TP in dollars (default: 0.10)
 --stop-loss    SL in dollars (default: 0.05)
+--demo         run paper mode (no real orders)
+--hours        demo duration in hours (default: 24)
+--start-bankroll demo starting bankroll (default: 20)
+--state-file   demo state path for resume
+--reset-state  clear previous demo state
+--no-resume    start demo without loading previous state
 ```
 
+### 24h Demo Mode (paper trading)
+
+For 24-hour evaluation with automatic resume and reconnect:
+
+```bash
+python apps/run_flash_crash.py --coin ETH --interval 5 --demo --hours 24 --start-bankroll 20 --state-file demo_state.json
+```
+
+What this does:
+- Starts demo with a virtual bankroll of **$20**.
+- Persists state to disk so if process stops/restarts, bankroll and open demo positions are restored.
+- Uses supervisor restart loop on fatal errors (`--reconnect-delay`, default 10s).
+- Keeps the same 24h window using saved end timestamp, so you can evaluate performance for the full trial period.
+
 **Strategy Logic:**
-1. Auto-discover current 15-minute market
+1. Auto-discover current market for selected interval (5m/15m)
 2. Monitor orderbook prices via WebSocket in real-time
-3. When probability drops by 0.30+ in 10 seconds, buy the crashed side
-4. Exit at +$0.10 (take profit) or -$0.05 (stop loss)
+3. When probability drops by configured threshold, buy the crashed side
+4. Exit at take-profit or stop-loss
 
 ## Strategy Development Guide
 
@@ -84,7 +160,7 @@ python strategies/flash_crash_strategy.py --coin ETH --drop 0.25 --size 10
 View live orderbook data in a beautiful terminal interface:
 
 ```bash
-python strategies/orderbook_tui.py --coin BTC --levels 5
+python apps/orderbook_tui.py --coin BTC --levels 5
 ```
 
 ## Code Examples
@@ -195,12 +271,12 @@ polymarket-trading-bot/
 │   ├── signer.py            # Order signing (EIP-712)
 │   ├── crypto.py            # Key encryption
 │   ├── utils.py             # Helper functions
-│   ├── gamma_client.py      # 15-minute market discovery
+│   ├── gamma_client.py      # 5m/15m market discovery
 │   └── websocket_client.py  # Real-time WebSocket client
 │
 ├── strategies/               # Trading strategies
-│   ├── flash_crash_strategy.py  # Volatility trading strategy
-│   └── orderbook_tui.py     # Real-time orderbook display
+│   ├── flash_crash.py      # Volatility trading strategy
+│   └── (see apps/orderbook_tui.py)
 │
 ├── examples/                 # Example code
 │   ├── quickstart.py        # Start here!
