@@ -1,29 +1,18 @@
 """
-Flash Crash Strategy - Volatility Trading for 15-Minute Markets
+Flash Crash Strategy - Volatility Trading for 5m/15m Markets
 
-This strategy monitors 15-minute Up/Down markets for sudden probability drops
+This strategy monitors short-duration Up/Down markets for sudden probability drops
 and executes trades when probability crashes by a threshold within a lookback window.
-
-Strategy Logic:
-1. Auto-discover current 15-minute market for selected coin
-2. Monitor orderbook prices in real-time via WebSocket
-3. When either "Up" or "Down" probability drops by threshold:
-   - Market buy the crashed side
-4. Exit conditions:
-   - Take profit: configurable (default +10 cents)
-   - Stop loss: configurable (default -5 cents)
-
-Usage:
-    from strategies.flash_crash import FlashCrashStrategy, FlashCrashConfig
-
-    strategy = FlashCrashStrategy(bot, config)
-    await strategy.run()
 """
 
+import json
+import os
+import time
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict, List, Optional
 
 from lib.console import Colors, format_countdown
+from lib.position_manager import Position
 from strategies.base import BaseStrategy, StrategyConfig
 from src.bot import TradingBot
 from src.websocket_client import OrderbookSnapshot
@@ -36,60 +25,61 @@ class FlashCrashConfig(StrategyConfig):
     drop_threshold: float = 0.30  # Absolute probability drop
 
 
-class FlashCrashStrategy(BaseStrategy):
-    """
-    Flash Crash Trading Strategy.
+@dataclass
+class DemoFlashCrashConfig(FlashCrashConfig):
+    """Paper/demo mode configuration persisted across restarts."""
 
-    Monitors 15-minute markets for sudden price drops and trades
-    the volatility with defined take-profit and stop-loss levels.
-    """
+    demo_hours: float = 24.0
+    start_bankroll: float = 20.0
+    state_file: str = "flash_crash_demo_state.json"
+    resume: bool = True
+    reset_state: bool = False
+
+
+class FlashCrashStrategy(BaseStrategy):
+    """Flash crash trading strategy."""
 
     def __init__(self, bot: TradingBot, config: FlashCrashConfig):
-        """Initialize flash crash strategy."""
         super().__init__(bot, config)
         self.flash_config = config
-
-        # Update price tracker with our threshold
         self.prices.drop_threshold = config.drop_threshold
 
     async def on_book_update(self, snapshot: OrderbookSnapshot) -> None:
-        """Handle orderbook update - check for flash crashes."""
-        pass  # Price recording is done in base class
+        pass
 
     async def on_tick(self, prices: Dict[str, float]) -> None:
-        """Check for flash crash on each tick."""
         if not self.positions.can_open_position:
             return
 
-        # Detect flash crash
         event = self.prices.detect_flash_crash()
         if event:
             self.log(
                 f"FLASH CRASH: {event.side.upper()} "
                 f"drop {event.drop:.2f} ({event.old_price:.2f} -> {event.new_price:.2f})",
-                "trade"
+                "trade",
             )
             current_price = prices.get(event.side, 0)
             if current_price > 0:
                 await self.execute_buy(event.side, current_price)
 
     def render_status(self, prices: Dict[str, float]) -> None:
-        """Render TUI status display."""
         lines = []
 
-        # Header
         ws_status = f"{Colors.GREEN}WS{Colors.RESET}" if self.is_connected else f"{Colors.RED}REST{Colors.RESET}"
         countdown = self._get_countdown_str()
         stats = self.positions.get_stats()
 
+        bankroll_text = ""
+        if hasattr(self, "bankroll"):
+            bankroll_text = f" | Bank: ${getattr(self, 'bankroll'):.2f}"
+
         lines.append(f"{Colors.BOLD}{'='*80}{Colors.RESET}")
         lines.append(
             f"{Colors.CYAN}[{self.config.coin}]{Colors.RESET} [{ws_status}] "
-            f"Ends: {countdown} | Trades: {stats['trades_closed']} | PnL: ${stats['total_pnl']:+.2f}"
+            f"Ends: {countdown}{bankroll_text} | Trades: {stats['trades_closed']} | PnL: ${stats['total_pnl']:+.2f}"
         )
         lines.append(f"{Colors.BOLD}{'='*80}{Colors.RESET}")
 
-        # Orderbook display
         up_ob = self.market.get_orderbook("up")
         down_ob = self.market.get_orderbook("down")
 
@@ -97,7 +87,6 @@ class FlashCrashStrategy(BaseStrategy):
         lines.append(f"{'Bid':>9} {'Size':>9} | {'Ask':>9} {'Size':>9}|{'Bid':>9} {'Size':>9} | {'Ask':>9} {'Size':>9}")
         lines.append("-" * 80)
 
-        # Get 5 levels
         up_bids = up_ob.bids[:5] if up_ob else []
         up_asks = up_ob.asks[:5] if up_ob else []
         down_bids = down_ob.bids[:5] if down_ob else []
@@ -112,7 +101,6 @@ class FlashCrashStrategy(BaseStrategy):
 
         lines.append("-" * 80)
 
-        # Summary
         up_mid = up_ob.mid_price if up_ob else prices.get("up", 0)
         down_mid = down_ob.mid_price if down_ob else prices.get("down", 0)
         up_spread = self.market.get_spread("up")
@@ -123,7 +111,6 @@ class FlashCrashStrategy(BaseStrategy):
             f"Mid: {Colors.RED}{down_mid:.4f}{Colors.RESET}  Spread: {down_spread:.4f}"
         )
 
-        # History info
         up_history = self.prices.get_history_count("up")
         down_history = self.prices.get_history_count("down")
         lines.append(
@@ -133,24 +120,21 @@ class FlashCrashStrategy(BaseStrategy):
 
         lines.append(f"{Colors.BOLD}{'='*80}{Colors.RESET}")
 
-        # Open Orders section
         lines.append(f"{Colors.BOLD}Open Orders:{Colors.RESET}")
         if self.open_orders:
-            for order in self.open_orders[:5]:  # Show max 5 orders
+            for order in self.open_orders[:5]:
                 side = order.get("side", "?")
                 price = float(order.get("price", 0))
                 size = float(order.get("original_size", order.get("size", 0)))
                 filled = float(order.get("size_matched", 0))
                 order_id = order.get("id", "")[:8]
                 token = order.get("asset_id", "")
-                # Determine if UP or DOWN
                 token_side = "UP" if token == self.token_ids.get("up") else "DOWN" if token == self.token_ids.get("down") else "?"
                 color = Colors.GREEN if side == "BUY" else Colors.RED
                 lines.append(f"  {color}{side:4}{Colors.RESET} {token_side:4} @ {price:.4f} Size: {size:.1f} Filled: {filled:.1f} ID: {order_id}...")
         else:
             lines.append(f"  {Colors.CYAN}(no open orders){Colors.RESET}")
 
-        # Positions
         lines.append(f"{Colors.BOLD}Positions:{Colors.RESET}")
         all_positions = self.positions.get_all_positions()
         if all_positions:
@@ -174,19 +158,16 @@ class FlashCrashStrategy(BaseStrategy):
         else:
             lines.append(f"  {Colors.CYAN}(no open positions){Colors.RESET}")
 
-        # Recent logs
         if self._log_buffer.messages:
             lines.append("-" * 80)
             lines.append(f"{Colors.BOLD}Recent Events:{Colors.RESET}")
             for msg in self._log_buffer.get_messages():
                 lines.append(f"  {msg}")
 
-        # Render
         output = "\033[H\033[J" + "\n".join(lines)
         print(output, flush=True)
 
     def _get_countdown_str(self) -> str:
-        """Get formatted countdown string."""
         market = self.current_market
         if not market:
             return "--:--"
@@ -195,5 +176,177 @@ class FlashCrashStrategy(BaseStrategy):
         return format_countdown(mins, secs)
 
     def on_market_change(self, old_slug: str, new_slug: str) -> None:
-        """Handle market change - clear price history."""
         self.prices.clear()
+
+
+class DemoFlashCrashStrategy(FlashCrashStrategy):
+    """Paper mode with persisted state and resumable 24h demo sessions."""
+
+    def __init__(self, bot: TradingBot, config: DemoFlashCrashConfig):
+        self.demo_config = config
+        self.bankroll = float(config.start_bankroll)
+        self.start_bankroll = float(config.start_bankroll)
+        self.run_end_ts = time.time() + config.demo_hours * 3600
+        super().__init__(bot, config)
+
+        if self.demo_config.reset_state and os.path.exists(self.demo_config.state_file):
+            try:
+                os.remove(self.demo_config.state_file)
+            except Exception:
+                pass
+
+        self._load_state_if_needed()
+        self._save_state()
+
+    def _available_bankroll(self) -> float:
+        reserved = 0.0
+        for pos in self.positions.get_all_positions():
+            reserved += pos.entry_price * pos.size
+        return max(self.bankroll - reserved, 0.0)
+
+    def _save_state(self) -> None:
+        data: Dict[str, Any] = {
+            "bankroll": self.bankroll,
+            "start_bankroll": self.start_bankroll,
+            "run_end_ts": self.run_end_ts,
+            "stats": {
+                "trades_opened": self.positions.trades_opened,
+                "trades_closed": self.positions.trades_closed,
+                "total_pnl": self.positions.total_pnl,
+                "winning_trades": self.positions.winning_trades,
+                "losing_trades": self.positions.losing_trades,
+            },
+            "positions": [
+                {
+                    "id": p.id,
+                    "side": p.side,
+                    "token_id": p.token_id,
+                    "entry_price": p.entry_price,
+                    "size": p.size,
+                    "entry_time": p.entry_time,
+                    "order_id": p.order_id,
+                }
+                for p in self.positions.get_all_positions()
+            ],
+        }
+
+        try:
+            tmp = self.demo_config.state_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.demo_config.state_file)
+        except Exception as exc:
+            self.log(f"State save failed: {exc}", "warning")
+
+    def _load_state_if_needed(self) -> None:
+        if not self.demo_config.resume:
+            return
+        if not os.path.exists(self.demo_config.state_file):
+            return
+
+        try:
+            with open(self.demo_config.state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            self.log(f"State load failed: {exc}", "warning")
+            return
+
+        self.bankroll = float(data.get("bankroll", self.bankroll))
+        self.start_bankroll = float(data.get("start_bankroll", self.start_bankroll))
+
+        run_end = float(data.get("run_end_ts", 0.0))
+        if run_end > time.time():
+            self.run_end_ts = run_end
+
+        stats = data.get("stats", {})
+        self.positions.trades_opened = int(stats.get("trades_opened", 0))
+        self.positions.trades_closed = int(stats.get("trades_closed", 0))
+        self.positions.total_pnl = float(stats.get("total_pnl", 0.0))
+        self.positions.winning_trades = int(stats.get("winning_trades", 0))
+        self.positions.losing_trades = int(stats.get("losing_trades", 0))
+
+        self.positions.clear()
+        restored = 0
+        for raw in data.get("positions", []):
+            pos = Position(
+                id=str(raw.get("id", "")) or f"restored-{restored}",
+                side=str(raw.get("side", "up")),
+                token_id=str(raw.get("token_id", "")),
+                entry_price=float(raw.get("entry_price", 0.0)),
+                size=float(raw.get("size", 0.0)),
+                entry_time=float(raw.get("entry_time", time.time())),
+                order_id=raw.get("order_id"),
+                take_profit_delta=self.positions.take_profit,
+                stop_loss_delta=self.positions.stop_loss,
+            )
+            if pos.size > 0 and pos.entry_price > 0:
+                self.positions._positions[pos.id] = pos
+                self.positions._positions_by_side[pos.side] = pos.id
+                restored += 1
+
+        self.log(
+            f"Demo state loaded: bank=${self.bankroll:.2f}, restored_positions={restored}, "
+            f"remaining={(self.run_end_ts - time.time())/3600:.2f}h",
+            "warning",
+        )
+
+    async def on_tick(self, prices: Dict[str, float]) -> None:
+        if time.time() >= self.run_end_ts:
+            self.log("Demo window reached (24h). Stopping.", "success")
+            self.running = False
+            self._save_state()
+            return
+
+        await super().on_tick(prices)
+        self._save_state()
+
+    async def execute_buy(self, side: str, current_price: float) -> bool:
+        token_id = self.token_ids.get(side)
+        if not token_id:
+            self.log(f"No token ID for {side}", "error")
+            return False
+
+        available = self._available_bankroll()
+        stake = min(self.config.size, available)
+        if stake <= 0:
+            self.log("No available bankroll to open new paper position", "warning")
+            return False
+
+        size = stake / current_price
+        self.log(
+            f"PAPER BUY {side.upper()} @ {current_price:.4f} shares={size:.2f} stake=${stake:.2f}",
+            "trade",
+        )
+
+        pos = self.positions.open_position(
+            side=side,
+            token_id=token_id,
+            entry_price=current_price,
+            size=size,
+            order_id=f"paper-{int(time.time())}",
+        )
+        if not pos:
+            return False
+
+        self._save_state()
+        return True
+
+    async def execute_sell(self, position: Position, current_price: float) -> bool:
+        pnl = position.get_pnl(current_price)
+        self.bankroll += pnl
+        self.positions.close_position(position.id, realized_pnl=pnl)
+        self.log(f"PAPER SELL {position.side.upper()} @ {current_price:.4f} PnL: ${pnl:+.2f}", "success")
+        self._save_state()
+        return True
+
+    async def stop(self) -> None:
+        self._save_state()
+        await super().stop()
+
+    def _print_summary(self) -> None:
+        super()._print_summary()
+        elapsed = max(self.run_end_ts - time.time(), 0)
+        self.log(
+            f"Demo bankroll: start=${self.start_bankroll:.2f} now=${self.bankroll:.2f} "
+            f"remaining={elapsed/3600:.2f}h state={self.demo_config.state_file}"
+        )
