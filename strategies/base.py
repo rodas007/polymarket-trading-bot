@@ -20,6 +20,8 @@ Usage:
             pass
 """
 
+from __future__ import annotations
+
 import asyncio
 import time
 from abc import ABC, abstractmethod
@@ -29,7 +31,7 @@ from typing import Optional, Dict, List
 from lib.console import LogBuffer, log
 from lib.market_manager import MarketManager, MarketInfo
 from lib.price_tracker import PriceTracker
-from lib.position_manager import PositionManager
+from lib.position_manager import Position, PositionManager
 from src.bot import TradingBot
 from src.websocket_client import OrderbookSnapshot
 
@@ -45,6 +47,7 @@ class StrategyConfig:
     stop_loss: float = 0.05
 
     # Market settings
+    interval_minutes: int = 15
     market_check_interval: float = 30.0
     auto_switch_market: bool = True
 
@@ -84,6 +87,7 @@ class BaseStrategy(ABC):
             coin=config.coin,
             market_check_interval=config.market_check_interval,
             auto_switch_market=config.auto_switch_market,
+            interval_minutes=config.interval_minutes,
         )
 
         self.prices = PriceTracker(
