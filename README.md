@@ -123,12 +123,16 @@ python apps/run_flash_crash.py --coin ETH --interval 5 --drop 0.25 --size 10
 --lookback  Detection window in seconds (default: 10)
 --take-profit  TP in dollars (default: 0.10)
 --stop-loss    SL in dollars (default: 0.05)
+--size-percent position size as % of available bankroll (e.g. 5 = 5%)
+--max-drawdown kill-switch % drawdown from start bankroll
 --demo         run paper mode (no real orders)
 --hours        demo duration in hours (default: 24)
 --start-bankroll demo starting bankroll (default: 20)
 --state-file   demo state path for resume
 --reset-state  clear previous demo state
 --no-resume    start demo without loading previous state
+--run-log-dir  directory for per-run JSONL trade logs (default: logs/runs)
+--no-run-log   disable per-run JSONL trade logs
 ```
 
 ### 24h Demo Mode (paper trading)
@@ -144,6 +148,19 @@ What this does:
 - Persists state to disk so if process stops/restarts, bankroll and open demo positions are restored.
 - Uses supervisor restart loop on fatal errors (`--reconnect-delay`, default 10s).
 - Keeps the same 24h window using saved end timestamp, so you can evaluate performance for the full trial period.
+- Creates a run log file per launch with timestamps, entry/exit prices, winners/losers, and bankroll snapshots over time.
+
+
+### Safer 5m setup example
+
+```bash
+python apps/run_flash_crash.py --coin BTC --interval 5 --demo \
+  --hours 24 --start-bankroll 20 --state-file demo_state.json --reset-state \
+  --size-percent 5 --max-drawdown 30 --drop 0.22 --lookback 6 --take-profit 0.20 --stop-loss 0.05
+```
+
+- `--size-percent 5` risks ~5% of available bankroll per entry.
+- `--max-drawdown 30` stops the strategy if bankroll drawdown reaches 30% from the session start.
 
 **Strategy Logic:**
 1. Auto-discover current market for selected interval (5m/15m)

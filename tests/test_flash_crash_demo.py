@@ -25,6 +25,12 @@ class DummyBot:
     async def get_open_orders(self):
         return []
 
+    async def cancel_all_orders(self):
+        class R:
+            success = True
+
+        return R()
+
 
 def _strategy(tmp_path, resume=True, reset_state=False):
     cfg = DemoFlashCrashConfig(
@@ -71,3 +77,82 @@ def test_demo_execute_buy_uses_available_bankroll(tmp_path):
 
     # Bankroll is not decremented on open (PnL-based accounting), but available is reduced by reserved stake
     assert s._available_bankroll() <= s.bankroll
+
+
+def test_demo_trade_events_are_written_to_run_log(tmp_path):
+    s = _strategy(tmp_path, resume=False, reset_state=True)
+    s.market.current_market = MarketInfo(
+        slug="btc-updown-5m-1000",
+        question="",
+        end_date="",
+        token_ids={"up": "tok-up", "down": "tok-down"},
+        prices={},
+        accepting_orders=True,
+    )
+
+    assert s._run_logger.log_path is not None
+
+    opened = asyncio.run(s.execute_buy("up", 0.5))
+    assert opened is True
+
+    pos = s.positions.get_all_positions()[0]
+    closed = asyncio.run(s.execute_sell(pos, 0.6))
+    assert closed is True
+
+    log_file = Path(s._run_logger.log_path)
+    content = log_file.read_text(encoding="utf-8")
+
+    assert '"event": "trade_opened"' in content
+    assert '"event": "trade_closed"' in content
+    assert '"entry_price": 0.5' in content
+    assert '"exit_price": 0.6' in content
+
+
+def test_demo_execute_buy_uses_size_percent_of_bankroll(tmp_path):
+    cfg = DemoFlashCrashConfig(
+        coin="BTC",
+        interval_minutes=5,
+        size=5.0,
+        size_percent=10.0,
+        demo_hours=24,
+        start_bankroll=20.0,
+        state_file=str(tmp_path / "demo_state.json"),
+        resume=False,
+        reset_state=True,
+    )
+    s = DemoFlashCrashStrategy(bot=DummyBot(), config=cfg)
+    s.market.current_market = MarketInfo(
+        slug="btc-updown-5m-1000",
+        question="",
+        end_date="",
+        token_ids={"up": "tok-up", "down": "tok-down"},
+        prices={},
+        accepting_orders=True,
+    )
+
+    ok = asyncio.run(s.execute_buy("up", 0.5))
+    assert ok is True
+    pos = s.positions.get_all_positions()[0]
+    # 10% of $20 = $2 stake => 4 shares at price 0.5
+    assert pos.size == 4.0
+
+
+def test_drawdown_kill_switch_triggers(tmp_path):
+    cfg = DemoFlashCrashConfig(
+        coin="BTC",
+        interval_minutes=5,
+        size=5.0,
+        max_drawdown_percent=30.0,
+        demo_hours=24,
+        start_bankroll=20.0,
+        state_file=str(tmp_path / "demo_state.json"),
+        resume=False,
+        reset_state=True,
+    )
+    s = DemoFlashCrashStrategy(bot=DummyBot(), config=cfg)
+
+    s.bankroll = 13.5  # 32.5% drawdown
+    triggered, drawdown = s._drawdown_triggered()
+
+    assert triggered is True
+    assert drawdown >= 30.0
