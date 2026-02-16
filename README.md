@@ -123,6 +123,8 @@ python apps/run_flash_crash.py --coin ETH --interval 5 --drop 0.25 --size 10
 --lookback  Detection window in seconds (default: 10)
 --take-profit  TP in dollars (default: 0.10)
 --stop-loss    SL in dollars (default: 0.05)
+--size-percent position size as % of available bankroll (e.g. 5 = 5%)
+--max-drawdown kill-switch % drawdown from start bankroll
 --demo         run paper mode (no real orders)
 --hours        demo duration in hours (default: 24)
 --start-bankroll demo starting bankroll (default: 20)

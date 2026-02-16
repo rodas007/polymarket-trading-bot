@@ -48,6 +48,9 @@ class PaperTradingBot:
     async def get_open_orders(self):
         return []
 
+    async def cancel_all_orders(self) -> OrderResult:
+        return OrderResult(success=True, message="paper cancel all simulated")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Flash Crash Strategy for Polymarket 5m/15m markets")
@@ -58,6 +61,8 @@ def parse_args():
     parser.add_argument("--lookback", type=int, default=10, help="Lookback window in seconds")
     parser.add_argument("--take-profit", type=float, default=0.10, help="Take profit in dollars")
     parser.add_argument("--stop-loss", type=float, default=0.05, help="Stop loss in dollars")
+    parser.add_argument("--size-percent", type=float, default=None, help="Position size as %% of available bankroll")
+    parser.add_argument("--max-drawdown", type=float, default=None, help="Kill-switch max drawdown %% from start bankroll")
 
     parser.add_argument("--demo", action="store_true", help="Run in paper/demo mode (no real orders)")
     parser.add_argument("--hours", type=float, default=24.0, help="Demo duration in hours (default: 24)")
@@ -105,6 +110,10 @@ def print_config(args):
     print(f"  Lookback: {args.lookback}s")
     print(f"  Take profit: +${args.take_profit:.2f}")
     print(f"  Stop loss: -${args.stop_loss:.2f}")
+    if args.size_percent is not None:
+        print(f"  Size percent: {args.size_percent:.2f}% of available bankroll")
+    if args.max_drawdown is not None:
+        print(f"  Kill-switch drawdown: {args.max_drawdown:.2f}%")
     if args.demo:
         print(f"  Demo hours: {args.hours:.2f}h")
         print(f"  Start bankroll: ${args.start_bankroll:.2f}")
@@ -150,6 +159,8 @@ def main():
             price_lookback_seconds=args.lookback,
             take_profit=args.take_profit,
             stop_loss=args.stop_loss,
+            size_percent=args.size_percent,
+            max_drawdown_percent=args.max_drawdown,
             demo_hours=args.hours,
             start_bankroll=args.start_bankroll,
             state_file=args.state_file,

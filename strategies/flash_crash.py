@@ -312,8 +312,7 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             self.log(f"No token ID for {side}", "error")
             return False
 
-        available = self._available_bankroll()
-        stake = min(self.config.size, available)
+        stake = self._resolve_stake_usd()
         if stake <= 0:
             self.log("No available bankroll to open new paper position", "warning")
             return False

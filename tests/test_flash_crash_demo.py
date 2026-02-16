@@ -25,6 +25,12 @@ class DummyBot:
     async def get_open_orders(self):
         return []
 
+    async def cancel_all_orders(self):
+        class R:
+            success = True
+
+        return R()
+
 
 def _strategy(tmp_path, resume=True, reset_state=False):
     cfg = DemoFlashCrashConfig(

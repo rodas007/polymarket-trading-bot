@@ -326,6 +326,13 @@ class BaseStrategy(ABC):
                 # Get current prices
                 prices = self._get_current_prices()
 
+                triggered, drawdown_pct = self._drawdown_triggered()
+                if triggered:
+                    await self._trigger_kill_switch(
+                        f"drawdown {drawdown_pct:.2f}% >= {self.config.max_drawdown_percent:.2f}%"
+                    )
+                    break
+
                 # Call tick handler
                 await self.on_tick(prices)
 
@@ -392,10 +399,18 @@ class BaseStrategy(ABC):
             self.log(f"No token ID for {side}", "error")
             return False
 
-        size = self.config.size / current_price
+        stake_usd = self._resolve_stake_usd()
+        if stake_usd <= 0:
+            self.log("No bankroll available to open new position", "warning")
+            return False
+
+        size = stake_usd / current_price
         buy_price = min(current_price + 0.02, 0.99)
 
-        self.log(f"BUY {side.upper()} @ {current_price:.4f} size={size:.2f}", "trade")
+        self.log(
+            f"BUY {side.upper()} @ {current_price:.4f} size={size:.2f} stake=${stake_usd:.2f}",
+            "trade",
+        )
 
         result = await self.bot.place_order(
             token_id=token_id,
