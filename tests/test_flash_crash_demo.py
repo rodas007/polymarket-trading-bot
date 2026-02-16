@@ -33,6 +33,21 @@ class DummyBot:
         return R()
 
 
+def _strategy(tmp_path, resume=True, reset_state=False, realistic=False):
+    os.environ["REALISTIC_PAPER"] = "1" if realistic else "0"
+    if not realistic:
+        for key in [
+            "NO_FILL_PROB",
+            "PARTIAL_FILL_MIN",
+            "PARTIAL_FILL_MAX",
+            "MIN_ENTRY_PRICE",
+            "MAX_ENTRY_PRICE",
+            "LIQUIDITY_USD_CAP",
+            "SLIPPAGE_BPS",
+            "TAKER_FEE_BPS",
+        ]:
+            os.environ.pop(key, None)
+
     cfg = DemoFlashCrashConfig(
         coin="BTC",
         interval_minutes=5,
@@ -106,3 +121,86 @@ def test_demo_trade_events_are_written_to_run_log(tmp_path):
     assert '"event": "trade_closed"' in content
     assert '"entry_price": 0.5' in content
     assert '"exit_price": 0.6' in content
+
+
+def test_demo_execute_buy_uses_size_percent_of_bankroll(tmp_path):
+    os.environ["REALISTIC_PAPER"] = "0"
+
+    cfg = DemoFlashCrashConfig(
+        coin="BTC",
+        interval_minutes=5,
+        size=5.0,
+        size_percent=10.0,
+        demo_hours=24,
+        start_bankroll=20.0,
+        state_file=str(tmp_path / "demo_state.json"),
+        resume=False,
+        reset_state=True,
+    )
+    s = DemoFlashCrashStrategy(bot=DummyBot(), config=cfg)
+    s.market.current_market = MarketInfo(
+        slug="btc-updown-5m-1000",
+        question="",
+        end_date="",
+        token_ids={"up": "tok-up", "down": "tok-down"},
+        prices={},
+        accepting_orders=True,
+    )
+
+    ok = asyncio.run(s.execute_buy("up", 0.5))
+    assert ok is True
+    pos = s.positions.get_all_positions()[0]
+    # 10% of $20 = $2 stake => 4 shares at price 0.5
+    assert pos.size == 4.0
+
+
+def test_drawdown_kill_switch_triggers(tmp_path):
+    os.environ["REALISTIC_PAPER"] = "0"
+
+    cfg = DemoFlashCrashConfig(
+        coin="BTC",
+        interval_minutes=5,
+        size=5.0,
+        max_drawdown_percent=30.0,
+        demo_hours=24,
+        start_bankroll=20.0,
+        state_file=str(tmp_path / "demo_state.json"),
+        resume=False,
+        reset_state=True,
+    )
+    s = DemoFlashCrashStrategy(bot=DummyBot(), config=cfg)
+
+    s.bankroll = 13.5  # 32.5% drawdown
+    triggered, drawdown = s._drawdown_triggered()
+
+    assert triggered is True
+    assert drawdown >= 30.0
+
+
+def test_realistic_paper_buy_respects_price_guards_and_liquidity(tmp_path):
+    os.environ["REALISTIC_PAPER"] = "1"
+    os.environ["NO_FILL_PROB"] = "0"
+    os.environ["PARTIAL_FILL_MIN"] = "1"
+    os.environ["PARTIAL_FILL_MAX"] = "1"
+    os.environ["MIN_ENTRY_PRICE"] = "0.05"
+    os.environ["MAX_ENTRY_PRICE"] = "0.95"
+    os.environ["LIQUIDITY_USD_CAP"] = "1.0"
+
+    s = _strategy(tmp_path, resume=False, reset_state=True, realistic=True)
+    s.market.current_market = MarketInfo(
+        slug="btc-updown-5m-1000",
+        question="",
+        end_date="",
+        token_ids={"up": "tok-up", "down": "tok-down"},
+        prices={},
+        accepting_orders=True,
+    )
+
+    blocked = asyncio.run(s.execute_buy("up", 0.03))
+    assert blocked is False
+
+    ok = asyncio.run(s.execute_buy("up", 0.5))
+    assert ok is True
+    pos = s.positions.get_all_positions()[0]
+    # Liquidity cap 1 USD near price 0.5 => max 2 shares filled
+    assert pos.size <= 2.0

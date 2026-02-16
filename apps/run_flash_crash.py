@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import sys
@@ -79,6 +80,13 @@ def parse_args():
     return parser.parse_args()
 
 
+def build_config(cls, **kwargs):
+    """Build config instance, dropping unsupported kwargs for compatibility."""
+    accepted = set(inspect.signature(cls).parameters.keys())
+    filtered = {k: v for k, v in kwargs.items() if k in accepted}
+    return cls(**filtered)
+
+
 def build_real_bot() -> TradingBot:
     private_key = os.environ.get("POLY_PRIVATE_KEY")
     safe_address = os.environ.get("POLY_SAFE_ADDRESS")
@@ -151,7 +159,8 @@ def main():
     if args.demo:
         bot = PaperTradingBot()
 
-        demo_cfg = DemoFlashCrashConfig(
+        demo_cfg = build_config(
+            DemoFlashCrashConfig,
             coin=args.coin.upper(),
             interval_minutes=args.interval,
             size=args.size,
@@ -177,7 +186,8 @@ def main():
         return
 
     bot = build_real_bot()
-    cfg = FlashCrashConfig(
+    cfg = build_config(
+        FlashCrashConfig,
         coin=args.coin.upper(),
         interval_minutes=args.interval,
         size=args.size,
@@ -185,6 +195,8 @@ def main():
         price_lookback_seconds=args.lookback,
         take_profit=args.take_profit,
         stop_loss=args.stop_loss,
+        size_percent=args.size_percent,
+        max_drawdown_percent=args.max_drawdown,
         enable_run_log=not args.no_run_log,
         run_log_dir=args.run_log_dir,
     )

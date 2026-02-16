@@ -66,6 +66,10 @@ class StrategyConfig:
     run_log_dir: str = "logs/runs"
     run_log_snapshot_interval: float = 30.0
 
+    # Risk controls
+    size_percent: Optional[float] = None  # Percent of available bankroll per trade
+    max_drawdown_percent: Optional[float] = None  # Kill-switch threshold from start bankroll
+
 
 class BaseStrategy(ABC):
     """
@@ -263,6 +267,10 @@ class BaseStrategy(ABC):
         """Return initial bankroll if strategy tracks one."""
         return None
 
+    def get_available_bankroll(self) -> Optional[float]:
+        """Return available bankroll (excluding reserves) if strategy tracks one."""
+        return self.get_current_bankroll()
+
     def _log_run_snapshot(self, prices: Dict[str, float]) -> None:
         """Persist periodic run snapshot for later analysis."""
         now = time.time()
@@ -297,6 +305,57 @@ class BaseStrategy(ABC):
             open_losing=losing_open,
             prices=prices,
         )
+
+    def _resolve_stake_usd(self) -> float:
+        """Resolve trade stake in USD based on fixed size or size_percent."""
+        stake = float(self.config.size)
+        available = self.get_available_bankroll()
+
+        if self.config.size_percent is not None and self.config.size_percent > 0:
+            if available is not None:
+                stake = max(available * (self.config.size_percent / 100.0), 0.0)
+
+        if available is not None:
+            stake = min(stake, max(available, 0.0))
+
+        return max(stake, 0.0)
+
+    def _drawdown_triggered(self) -> tuple[bool, float]:
+        """Check if max drawdown kill-switch should trigger."""
+        if self.config.max_drawdown_percent is None or self.config.max_drawdown_percent <= 0:
+            return (False, 0.0)
+
+        start_bankroll = self.get_start_bankroll()
+        current_bankroll = self.get_current_bankroll()
+        if start_bankroll is None or current_bankroll is None or start_bankroll <= 0:
+            return (False, 0.0)
+
+        drawdown_pct = max((start_bankroll - current_bankroll) / start_bankroll * 100.0, 0.0)
+        return (drawdown_pct >= self.config.max_drawdown_percent, drawdown_pct)
+
+    async def _trigger_kill_switch(self, reason: str) -> None:
+        """Stop trading, attempt cleanup, and close positions."""
+        self.log(f"KILL SWITCH triggered: {reason}", "error")
+        self._run_logger.event("kill_switch_triggered", reason=reason, bankroll=self.get_current_bankroll())
+
+        try:
+            result = await self.bot.cancel_all_orders()
+            if result.success:
+                self.log("Kill-switch: cancelled all open orders", "warning")
+        except Exception:
+            pass
+
+        prices = self._get_current_prices()
+        for position in list(self.positions.get_all_positions()):
+            exit_price = prices.get(position.side, 0.0)
+            if exit_price <= 0:
+                exit_price = position.entry_price
+            try:
+                await self.execute_sell(position, exit_price)
+            except Exception:
+                pass
+
+        self.running = False
 
     async def stop(self) -> None:
         """Stop the strategy."""
@@ -437,6 +496,7 @@ class BaseStrategy(ABC):
                     size=size,
                     order_id=result.order_id,
                     bankroll=self.get_current_bankroll(),
+                    stake_usd=stake_usd,
                 )
             return True
         else:
