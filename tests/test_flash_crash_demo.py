@@ -1,6 +1,7 @@
 """Tests for demo/paper flash crash strategy state persistence."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -32,7 +33,6 @@ class DummyBot:
         return R()
 
 
-def _strategy(tmp_path, resume=True, reset_state=False):
     cfg = DemoFlashCrashConfig(
         coin="BTC",
         interval_minutes=5,

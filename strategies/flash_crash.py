@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from brokers import RealisticPaperBroker
 from lib.console import Colors, format_countdown
 from lib.position_manager import Position
 from strategies.base import BaseStrategy, StrategyConfig
@@ -187,6 +188,7 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
         self.bankroll = float(config.start_bankroll)
         self.start_bankroll = float(config.start_bankroll)
         self.run_end_ts = time.time() + config.demo_hours * 3600
+        self.paper_broker = RealisticPaperBroker()
         super().__init__(bot, config)
 
         if self.demo_config.reset_state and os.path.exists(self.demo_config.state_file):
@@ -199,6 +201,10 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
         self._save_state()
 
     def _available_bankroll(self) -> float:
+        if self.paper_broker.enabled:
+            # In realistic mode we keep cash accounting directly in bankroll.
+            return max(self.bankroll, 0.0)
+
         reserved = 0.0
         for pos in self.positions.get_all_positions():
             reserved += pos.entry_price * pos.size
@@ -317,20 +323,48 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             self.log("No available bankroll to open new paper position", "warning")
             return False
 
-        size = stake / current_price
+        result = self.paper_broker.simulate_buy(
+            price=current_price,
+            bankroll=available,
+            preferred_stake=stake,
+        )
+        if not result.filled or result.filled_shares <= 0:
+            self.log(f"PAPER BUY skipped ({result.reason})", "warning")
+            self._run_logger.event(
+                "trade_open_skipped",
+                side=side,
+                token_id=token_id,
+                price=current_price,
+                reason=result.reason,
+                bankroll=self.bankroll,
+                mode="paper",
+            )
+            return False
+
+        size = result.filled_shares
+        fee_per_share = result.fee_usd / size if size > 0 else 0.0
+        entry_price_effective = result.avg_price + fee_per_share
+
+        # Realistic mode uses cash accounting; legacy mode keeps PnL accounting.
+        if self.paper_broker.enabled:
+            self.bankroll -= (size * result.avg_price + result.fee_usd)
+
         self.log(
-            f"PAPER BUY {side.upper()} @ {current_price:.4f} shares={size:.2f} stake=${stake:.2f}",
+            f"PAPER BUY {side.upper()} @ {entry_price_effective:.4f} shares={size:.2f} "
+            f"stake=${size * entry_price_effective:.2f}",
             "trade",
         )
 
         pos = self.positions.open_position(
             side=side,
             token_id=token_id,
-            entry_price=current_price,
+            entry_price=entry_price_effective,
             size=size,
             order_id=f"paper-{int(time.time())}",
         )
         if not pos:
+            if self.paper_broker.enabled:
+                self.bankroll += (size * result.avg_price + result.fee_usd)
             return False
 
         self._run_logger.event(
