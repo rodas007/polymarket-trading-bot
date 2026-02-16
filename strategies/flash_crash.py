@@ -302,9 +302,6 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
     def get_start_bankroll(self) -> Optional[float]:
         return self.start_bankroll
 
-    def get_available_bankroll(self) -> Optional[float]:
-        return self._available_bankroll()
-
     async def on_tick(self, prices: Dict[str, float]) -> None:
         if time.time() >= self.run_end_ts:
             self.log("Demo window reached (24h). Stopping.", "success")
@@ -321,7 +318,6 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             self.log(f"No token ID for {side}", "error")
             return False
 
-        available = self._available_bankroll()
         stake = self._resolve_stake_usd()
         if stake <= 0:
             self.log("No available bankroll to open new paper position", "warning")
@@ -375,11 +371,9 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             "trade_opened",
             side=side,
             token_id=token_id,
-            entry_price=entry_price_effective,
-            raw_entry_price=current_price,
+            entry_price=current_price,
             size=size,
             order_id=pos.order_id,
-            fee_usd=result.fee_usd,
             bankroll=self.bankroll,
             mode="paper",
         )
@@ -388,64 +382,21 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
         return True
 
     async def execute_sell(self, position: Position, current_price: float) -> bool:
-        result = self.paper_broker.simulate_sell(price=current_price, shares=position.size)
-        if not result.filled or result.filled_shares <= 0:
-            self.log(f"PAPER SELL skipped ({result.reason})", "warning")
-            self._run_logger.event(
-                "trade_close_skipped",
-                side=position.side,
-                token_id=position.token_id,
-                price=current_price,
-                reason=result.reason,
-                bankroll=self.bankroll,
-                mode="paper",
-            )
-            return False
-
-        sold_shares = min(result.filled_shares, position.size)
-        fee_per_share = result.fee_usd / sold_shares if sold_shares > 0 else 0.0
-        exit_price_effective = result.avg_price - fee_per_share
-        pnl = (exit_price_effective - position.entry_price) * sold_shares
-
-        if self.paper_broker.enabled:
-            self.bankroll += sold_shares * result.avg_price - result.fee_usd
-        else:
-            self.bankroll += pnl
-
-        partial_close = sold_shares < position.size
-
-        if partial_close:
-            position.size -= sold_shares
-            self.positions.total_pnl += pnl
-            if pnl >= 0:
-                self.positions.winning_trades += 1
-            else:
-                self.positions.losing_trades += 1
-            self.log(
-                f"PAPER PARTIAL SELL {position.side.upper()} @ {exit_price_effective:.4f} "
-                f"shares={sold_shares:.2f} PnL: ${pnl:+.2f}",
-                "warning",
-            )
-            event_type = "trade_partially_closed"
-        else:
-            self.positions.close_position(position.id, realized_pnl=pnl)
-            self.log(f"PAPER SELL {position.side.upper()} @ {exit_price_effective:.4f} PnL: ${pnl:+.2f}", "success")
-            event_type = "trade_closed"
-
+        pnl = position.get_pnl(current_price)
+        self.bankroll += pnl
+        self.positions.close_position(position.id, realized_pnl=pnl)
+        self.log(f"PAPER SELL {position.side.upper()} @ {current_price:.4f} PnL: ${pnl:+.2f}", "success")
         self._run_logger.event(
-            event_type,
+            "trade_closed",
             side=position.side,
             token_id=position.token_id,
             entry_price=position.entry_price,
-            exit_price=exit_price_effective,
-            raw_exit_price=current_price,
-            size=sold_shares,
-            remaining_size=position.size if partial_close else 0.0,
+            exit_price=current_price,
+            size=position.size,
             pnl=pnl,
             result="win" if pnl >= 0 else "loss",
             entry_time=position.entry_time,
             hold_seconds=position.get_hold_time(),
-            fee_usd=result.fee_usd,
             bankroll=self.bankroll,
             mode="paper",
         )

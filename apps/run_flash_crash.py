@@ -185,8 +185,6 @@ def main():
         price_lookback_seconds=args.lookback,
         take_profit=args.take_profit,
         stop_loss=args.stop_loss,
-        size_percent=args.size_percent,
-        max_drawdown_percent=args.max_drawdown,
         enable_run_log=not args.no_run_log,
         run_log_dir=args.run_log_dir,
     )
