@@ -296,9 +296,6 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
     def get_start_bankroll(self) -> Optional[float]:
         return self.start_bankroll
 
-    def get_available_bankroll(self) -> Optional[float]:
-        return self._available_bankroll()
-
     async def on_tick(self, prices: Dict[str, float]) -> None:
         if time.time() >= self.run_end_ts:
             self.log("Demo window reached (24h). Stopping.", "success")

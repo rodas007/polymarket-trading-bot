@@ -150,18 +150,6 @@ What this does:
 - Keeps the same 24h window using saved end timestamp, so you can evaluate performance for the full trial period.
 - Creates a run log file per launch with timestamps, entry/exit prices, winners/losers, and bankroll snapshots over time.
 
-
-### Safer 5m setup example
-
-```bash
-python apps/run_flash_crash.py --coin BTC --interval 5 --demo \
-  --hours 24 --start-bankroll 20 --state-file demo_state.json --reset-state \
-  --size-percent 5 --max-drawdown 30 --drop 0.22 --lookback 6 --take-profit 0.20 --stop-loss 0.05
-```
-
-- `--size-percent 5` risks ~5% of available bankroll per entry.
-- `--max-drawdown 30` stops the strategy if bankroll drawdown reaches 30% from the session start.
-
 **Strategy Logic:**
 1. Auto-discover current market for selected interval (5m/15m)
 2. Monitor orderbook prices via WebSocket in real-time
