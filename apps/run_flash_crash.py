@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import sys
@@ -48,6 +49,9 @@ class PaperTradingBot:
     async def get_open_orders(self):
         return []
 
+    async def cancel_all_orders(self) -> OrderResult:
+        return OrderResult(success=True, message="paper cancel all simulated")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Flash Crash Strategy for Polymarket 5m/15m markets")
@@ -58,6 +62,8 @@ def parse_args():
     parser.add_argument("--lookback", type=int, default=10, help="Lookback window in seconds")
     parser.add_argument("--take-profit", type=float, default=0.10, help="Take profit in dollars")
     parser.add_argument("--stop-loss", type=float, default=0.05, help="Stop loss in dollars")
+    parser.add_argument("--size-percent", type=float, default=None, help="Position size as %% of available bankroll")
+    parser.add_argument("--max-drawdown", type=float, default=None, help="Kill-switch max drawdown %% from start bankroll")
 
     parser.add_argument("--demo", action="store_true", help="Run in paper/demo mode (no real orders)")
     parser.add_argument("--hours", type=float, default=24.0, help="Demo duration in hours (default: 24)")
@@ -67,8 +73,18 @@ def parse_args():
     parser.add_argument("--no-resume", action="store_true", help="Do not resume demo state if state file exists")
     parser.add_argument("--reconnect-delay", type=int, default=10, help="Seconds before restarting after fatal error")
 
+    parser.add_argument("--run-log-dir", type=str, default="logs/runs", help="Directory to store per-run trade logs")
+    parser.add_argument("--no-run-log", action="store_true", help="Disable per-run trade logging")
+
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
+
+
+def build_config(cls, **kwargs):
+    """Build config instance, dropping unsupported kwargs for compatibility."""
+    accepted = set(inspect.signature(cls).parameters.keys())
+    filtered = {k: v for k, v in kwargs.items() if k in accepted}
+    return cls(**filtered)
 
 
 def build_real_bot() -> TradingBot:
@@ -102,11 +118,17 @@ def print_config(args):
     print(f"  Lookback: {args.lookback}s")
     print(f"  Take profit: +${args.take_profit:.2f}")
     print(f"  Stop loss: -${args.stop_loss:.2f}")
+    if args.size_percent is not None:
+        print(f"  Size percent: {args.size_percent:.2f}% of available bankroll")
+    if args.max_drawdown is not None:
+        print(f"  Kill-switch drawdown: {args.max_drawdown:.2f}%")
     if args.demo:
         print(f"  Demo hours: {args.hours:.2f}h")
         print(f"  Start bankroll: ${args.start_bankroll:.2f}")
         print(f"  Resume state: {not args.no_resume}")
         print(f"  State file: {args.state_file}")
+    print(f"  Run log enabled: {not args.no_run_log}")
+    print(f"  Run log dir: {args.run_log_dir}")
     print()
 
 
@@ -137,7 +159,8 @@ def main():
     if args.demo:
         bot = PaperTradingBot()
 
-        demo_cfg = DemoFlashCrashConfig(
+        demo_cfg = build_config(
+            DemoFlashCrashConfig,
             coin=args.coin.upper(),
             interval_minutes=args.interval,
             size=args.size,
@@ -145,11 +168,15 @@ def main():
             price_lookback_seconds=args.lookback,
             take_profit=args.take_profit,
             stop_loss=args.stop_loss,
+            size_percent=args.size_percent,
+            max_drawdown_percent=args.max_drawdown,
             demo_hours=args.hours,
             start_bankroll=args.start_bankroll,
             state_file=args.state_file,
             resume=not args.no_resume,
             reset_state=args.reset_state,
+            enable_run_log=not args.no_run_log,
+            run_log_dir=args.run_log_dir,
         )
 
         run_with_supervisor(
@@ -159,7 +186,8 @@ def main():
         return
 
     bot = build_real_bot()
-    cfg = FlashCrashConfig(
+    cfg = build_config(
+        FlashCrashConfig,
         coin=args.coin.upper(),
         interval_minutes=args.interval,
         size=args.size,
@@ -167,6 +195,10 @@ def main():
         price_lookback_seconds=args.lookback,
         take_profit=args.take_profit,
         stop_loss=args.stop_loss,
+        size_percent=args.size_percent,
+        max_drawdown_percent=args.max_drawdown,
+        enable_run_log=not args.no_run_log,
+        run_log_dir=args.run_log_dir,
     )
 
     run_with_supervisor(
