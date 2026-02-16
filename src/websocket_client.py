@@ -356,6 +356,7 @@ class MarketWebSocket:
         subscribe_msg = {
             "assets_ids": asset_ids,
             "type": "market",
+            "operation": "subscribe",
         }
 
         try:
@@ -400,6 +401,7 @@ class MarketWebSocket:
         subscribe_msg = {
             "assets_ids": asset_ids,
             "type": "market",
+            "operation": "subscribe",
         }
 
         try:
