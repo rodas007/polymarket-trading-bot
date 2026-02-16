@@ -28,6 +28,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
+from lib.run_logger import TradeRunLogger
+
 from lib.console import LogBuffer, log
 from lib.market_manager import MarketManager, MarketInfo
 from lib.price_tracker import PriceTracker
@@ -58,6 +60,15 @@ class StrategyConfig:
     # Display settings
     update_interval: float = 0.1
     order_refresh_interval: float = 30.0  # Seconds between order refreshes
+
+    # Run logging
+    enable_run_log: bool = True
+    run_log_dir: str = "logs/runs"
+    run_log_snapshot_interval: float = 30.0
+
+    # Risk controls
+    size_percent: Optional[float] = None  # Percent of available bankroll per trade
+    max_drawdown_percent: Optional[float] = None  # Kill-switch threshold from start bankroll
 
 
 class BaseStrategy(ABC):
@@ -112,6 +123,16 @@ class BaseStrategy(ABC):
         self._cached_orders: List[dict] = []
         self._last_order_refresh: float = 0
         self._order_refresh_task: Optional[asyncio.Task] = None
+
+        # Run logger
+        self._run_logger = TradeRunLogger(
+            strategy_name=self.__class__.__name__,
+            coin=config.coin,
+            interval_minutes=config.interval_minutes,
+            enabled=config.enable_run_log,
+            log_dir=config.run_log_dir,
+        )
+        self._last_snapshot_log: float = 0.0
 
     @property
     def is_connected(self) -> bool:
@@ -226,7 +247,115 @@ class BaseStrategy(ABC):
         if not await self.market.wait_for_data(timeout=5.0):
             self.log("Timeout waiting for market data", "warning")
 
+        self._run_logger.event(
+            "run_started",
+            coin=self.config.coin,
+            interval_minutes=self.config.interval_minutes,
+            start_bankroll=self.get_start_bankroll(),
+            log_path=self._run_logger.log_path,
+        )
+        if self._run_logger.log_path:
+            self.log(f"Run log: {self._run_logger.log_path}", "info")
+
         return True
+
+    def get_current_bankroll(self) -> Optional[float]:
+        """Return current bankroll if strategy tracks one."""
+        return None
+
+    def get_start_bankroll(self) -> Optional[float]:
+        """Return initial bankroll if strategy tracks one."""
+        return None
+
+    def get_available_bankroll(self) -> Optional[float]:
+        """Return available bankroll (excluding reserves) if strategy tracks one."""
+        return self.get_current_bankroll()
+
+    def _log_run_snapshot(self, prices: Dict[str, float]) -> None:
+        """Persist periodic run snapshot for later analysis."""
+        now = time.time()
+        if now - self._last_snapshot_log < self.config.run_log_snapshot_interval:
+            return
+        self._last_snapshot_log = now
+
+        open_positions = self.positions.get_all_positions()
+        winning_open = 0
+        losing_open = 0
+        for position in open_positions:
+            current_price = prices.get(position.side, 0)
+            if current_price <= 0:
+                continue
+            pnl = position.get_pnl(current_price)
+            if pnl >= 0:
+                winning_open += 1
+            else:
+                losing_open += 1
+
+        stats = self.positions.get_stats()
+        self._run_logger.event(
+            "snapshot",
+            bankroll=self.get_current_bankroll(),
+            trades_opened=stats["trades_opened"],
+            trades_closed=stats["trades_closed"],
+            wins_closed=stats["winning_trades"],
+            losses_closed=stats["losing_trades"],
+            total_pnl=stats["total_pnl"],
+            open_positions=len(open_positions),
+            open_winning=winning_open,
+            open_losing=losing_open,
+            prices=prices,
+        )
+
+    def _resolve_stake_usd(self) -> float:
+        """Resolve trade stake in USD based on fixed size or size_percent."""
+        stake = float(self.config.size)
+        available = self.get_available_bankroll()
+
+        if self.config.size_percent is not None and self.config.size_percent > 0:
+            if available is not None:
+                stake = max(available * (self.config.size_percent / 100.0), 0.0)
+
+        if available is not None:
+            stake = min(stake, max(available, 0.0))
+
+        return max(stake, 0.0)
+
+    def _drawdown_triggered(self) -> tuple[bool, float]:
+        """Check if max drawdown kill-switch should trigger."""
+        if self.config.max_drawdown_percent is None or self.config.max_drawdown_percent <= 0:
+            return (False, 0.0)
+
+        start_bankroll = self.get_start_bankroll()
+        current_bankroll = self.get_current_bankroll()
+        if start_bankroll is None or current_bankroll is None or start_bankroll <= 0:
+            return (False, 0.0)
+
+        drawdown_pct = max((start_bankroll - current_bankroll) / start_bankroll * 100.0, 0.0)
+        return (drawdown_pct >= self.config.max_drawdown_percent, drawdown_pct)
+
+    async def _trigger_kill_switch(self, reason: str) -> None:
+        """Stop trading, attempt cleanup, and close positions."""
+        self.log(f"KILL SWITCH triggered: {reason}", "error")
+        self._run_logger.event("kill_switch_triggered", reason=reason, bankroll=self.get_current_bankroll())
+
+        try:
+            result = await self.bot.cancel_all_orders()
+            if result.success:
+                self.log("Kill-switch: cancelled all open orders", "warning")
+        except Exception:
+            pass
+
+        prices = self._get_current_prices()
+        for position in list(self.positions.get_all_positions()):
+            exit_price = prices.get(position.side, 0.0)
+            if exit_price <= 0:
+                exit_price = position.entry_price
+            try:
+                await self.execute_sell(position, exit_price)
+            except Exception:
+                pass
+
+        self.running = False
 
     async def stop(self) -> None:
         """Stop the strategy."""
@@ -256,6 +385,13 @@ class BaseStrategy(ABC):
                 # Get current prices
                 prices = self._get_current_prices()
 
+                triggered, drawdown_pct = self._drawdown_triggered()
+                if triggered:
+                    await self._trigger_kill_switch(
+                        f"drawdown {drawdown_pct:.2f}% >= {self.config.max_drawdown_percent:.2f}%"
+                    )
+                    break
+
                 # Call tick handler
                 await self.on_tick(prices)
 
@@ -264,6 +400,8 @@ class BaseStrategy(ABC):
 
                 # Refresh orders in background (fire-and-forget)
                 self._maybe_refresh_orders()
+
+                self._log_run_snapshot(prices)
 
                 # Update display
                 self.render_status(prices)
@@ -320,10 +458,18 @@ class BaseStrategy(ABC):
             self.log(f"No token ID for {side}", "error")
             return False
 
-        size = self.config.size / current_price
+        stake_usd = self._resolve_stake_usd()
+        if stake_usd <= 0:
+            self.log("No bankroll available to open new position", "warning")
+            return False
+
+        size = stake_usd / current_price
         buy_price = min(current_price + 0.02, 0.99)
 
-        self.log(f"BUY {side.upper()} @ {current_price:.4f} size={size:.2f}", "trade")
+        self.log(
+            f"BUY {side.upper()} @ {current_price:.4f} size={size:.2f} stake=${stake_usd:.2f}",
+            "trade",
+        )
 
         result = await self.bot.place_order(
             token_id=token_id,
@@ -334,13 +480,24 @@ class BaseStrategy(ABC):
 
         if result.success:
             self.log(f"Order placed: {result.order_id}", "success")
-            self.positions.open_position(
+            position = self.positions.open_position(
                 side=side,
                 token_id=token_id,
                 entry_price=current_price,
                 size=size,
                 order_id=result.order_id,
             )
+            if position:
+                self._run_logger.event(
+                    "trade_opened",
+                    side=side,
+                    token_id=token_id,
+                    entry_price=current_price,
+                    size=size,
+                    order_id=result.order_id,
+                    bankroll=self.get_current_bankroll(),
+                    stake_usd=stake_usd,
+                )
             return True
         else:
             self.log(f"Order failed: {result.message}", "error")
@@ -370,6 +527,19 @@ class BaseStrategy(ABC):
         if result.success:
             self.log(f"Sell order: {result.order_id} PnL: ${pnl:+.2f}", "success")
             self.positions.close_position(position.id, realized_pnl=pnl)
+            self._run_logger.event(
+                "trade_closed",
+                side=position.side,
+                token_id=position.token_id,
+                entry_price=position.entry_price,
+                exit_price=current_price,
+                size=position.size,
+                pnl=pnl,
+                result="win" if pnl >= 0 else "loss",
+                entry_time=position.entry_time,
+                hold_seconds=position.get_hold_time(),
+                bankroll=self.get_current_bankroll(),
+            )
             return True
         else:
             self.log(f"Sell failed: {result.message}", "error")
@@ -384,6 +554,7 @@ class BaseStrategy(ABC):
         self.log(f"  Trades: {stats['trades_closed']}")
         self.log(f"  Total PnL: ${stats['total_pnl']:+.2f}")
         self.log(f"  Win rate: {stats['win_rate']:.1f}%")
+        self._run_logger.event("run_finished", stats=stats, bankroll=self.get_current_bankroll())
 
     # Abstract methods to implement in subclasses
 
