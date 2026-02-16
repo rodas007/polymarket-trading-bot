@@ -67,6 +67,9 @@ def parse_args():
     parser.add_argument("--no-resume", action="store_true", help="Do not resume demo state if state file exists")
     parser.add_argument("--reconnect-delay", type=int, default=10, help="Seconds before restarting after fatal error")
 
+    parser.add_argument("--run-log-dir", type=str, default="logs/runs", help="Directory to store per-run trade logs")
+    parser.add_argument("--no-run-log", action="store_true", help="Disable per-run trade logging")
+
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -107,6 +110,8 @@ def print_config(args):
         print(f"  Start bankroll: ${args.start_bankroll:.2f}")
         print(f"  Resume state: {not args.no_resume}")
         print(f"  State file: {args.state_file}")
+    print(f"  Run log enabled: {not args.no_run_log}")
+    print(f"  Run log dir: {args.run_log_dir}")
     print()
 
 
@@ -150,6 +155,8 @@ def main():
             state_file=args.state_file,
             resume=not args.no_resume,
             reset_state=args.reset_state,
+            enable_run_log=not args.no_run_log,
+            run_log_dir=args.run_log_dir,
         )
 
         run_with_supervisor(
@@ -167,6 +174,8 @@ def main():
         price_lookback_seconds=args.lookback,
         take_profit=args.take_profit,
         stop_loss=args.stop_loss,
+        enable_run_log=not args.no_run_log,
+        run_log_dir=args.run_log_dir,
     )
 
     run_with_supervisor(

@@ -129,6 +129,8 @@ python apps/run_flash_crash.py --coin ETH --interval 5 --drop 0.25 --size 10
 --state-file   demo state path for resume
 --reset-state  clear previous demo state
 --no-resume    start demo without loading previous state
+--run-log-dir  directory for per-run JSONL trade logs (default: logs/runs)
+--no-run-log   disable per-run JSONL trade logs
 ```
 
 ### 24h Demo Mode (paper trading)
@@ -144,6 +146,7 @@ What this does:
 - Persists state to disk so if process stops/restarts, bankroll and open demo positions are restored.
 - Uses supervisor restart loop on fatal errors (`--reconnect-delay`, default 10s).
 - Keeps the same 24h window using saved end timestamp, so you can evaluate performance for the full trial period.
+- Creates a run log file per launch with timestamps, entry/exit prices, winners/losers, and bankroll snapshots over time.
 
 **Strategy Logic:**
 1. Auto-discover current market for selected interval (5m/15m)

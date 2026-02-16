@@ -71,3 +71,32 @@ def test_demo_execute_buy_uses_available_bankroll(tmp_path):
 
     # Bankroll is not decremented on open (PnL-based accounting), but available is reduced by reserved stake
     assert s._available_bankroll() <= s.bankroll
+
+
+def test_demo_trade_events_are_written_to_run_log(tmp_path):
+    s = _strategy(tmp_path, resume=False, reset_state=True)
+    s.market.current_market = MarketInfo(
+        slug="btc-updown-5m-1000",
+        question="",
+        end_date="",
+        token_ids={"up": "tok-up", "down": "tok-down"},
+        prices={},
+        accepting_orders=True,
+    )
+
+    assert s._run_logger.log_path is not None
+
+    opened = asyncio.run(s.execute_buy("up", 0.5))
+    assert opened is True
+
+    pos = s.positions.get_all_positions()[0]
+    closed = asyncio.run(s.execute_sell(pos, 0.6))
+    assert closed is True
+
+    log_file = Path(s._run_logger.log_path)
+    content = log_file.read_text(encoding="utf-8")
+
+    assert '"event": "trade_opened"' in content
+    assert '"event": "trade_closed"' in content
+    assert '"entry_price": 0.5' in content
+    assert '"exit_price": 0.6' in content

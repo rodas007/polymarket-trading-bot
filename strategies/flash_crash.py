@@ -290,6 +290,12 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             "warning",
         )
 
+    def get_current_bankroll(self) -> Optional[float]:
+        return self.bankroll
+
+    def get_start_bankroll(self) -> Optional[float]:
+        return self.start_bankroll
+
     async def on_tick(self, prices: Dict[str, float]) -> None:
         if time.time() >= self.run_end_ts:
             self.log("Demo window reached (24h). Stopping.", "success")
@@ -328,6 +334,17 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
         if not pos:
             return False
 
+        self._run_logger.event(
+            "trade_opened",
+            side=side,
+            token_id=token_id,
+            entry_price=current_price,
+            size=size,
+            order_id=pos.order_id,
+            bankroll=self.bankroll,
+            mode="paper",
+        )
+
         self._save_state()
         return True
 
@@ -336,6 +353,20 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
         self.bankroll += pnl
         self.positions.close_position(position.id, realized_pnl=pnl)
         self.log(f"PAPER SELL {position.side.upper()} @ {current_price:.4f} PnL: ${pnl:+.2f}", "success")
+        self._run_logger.event(
+            "trade_closed",
+            side=position.side,
+            token_id=position.token_id,
+            entry_price=position.entry_price,
+            exit_price=current_price,
+            size=position.size,
+            pnl=pnl,
+            result="win" if pnl >= 0 else "loss",
+            entry_time=position.entry_time,
+            hold_seconds=position.get_hold_time(),
+            bankroll=self.bankroll,
+            mode="paper",
+        )
         self._save_state()
         return True
 
