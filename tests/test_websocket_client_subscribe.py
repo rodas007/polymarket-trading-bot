@@ -37,7 +37,7 @@ def test_subscribe_uses_lowercase_market_type():
 
     assert ok is True
     payload = json.loads(ws._ws.sent[-1])  # type: ignore[attr-defined]
-    assert payload == {"assets_ids": ["tok1", "tok2"], "type": "market"}
+    assert payload == {"assets_ids": ["tok1", "tok2"], "type": "market", "operation": "subscribe"}
 
 
 def test_unsubscribe_payload_has_no_duplicate_keys():
@@ -49,3 +49,26 @@ def test_unsubscribe_payload_has_no_duplicate_keys():
     assert ok is True
     payload = json.loads(ws._ws.sent[-1])  # type: ignore[attr-defined]
     assert payload == {"assets_ids": ["tok1"], "type": "market", "operation": "unsubscribe"}
+
+
+def test_replace_subscription_unsubscribes_old_assets_before_subscribing_new_assets():
+    ws = _make_connected_ws()
+
+    ws._subscribed_assets.update(["old1", "old2"])  # type: ignore[attr-defined]
+    ok = asyncio.run(ws.subscribe(["new1", "new2"], replace=True))
+
+    assert ok is True
+    assert len(ws._ws.sent) == 2  # type: ignore[attr-defined]
+
+    unsubscribe_payload = json.loads(ws._ws.sent[0])  # type: ignore[attr-defined]
+    subscribe_payload = json.loads(ws._ws.sent[1])  # type: ignore[attr-defined]
+
+    assert unsubscribe_payload["type"] == "market"
+    assert unsubscribe_payload["operation"] == "unsubscribe"
+    assert set(unsubscribe_payload["assets_ids"]) == {"old1", "old2"}
+
+    assert subscribe_payload == {
+        "assets_ids": ["new1", "new2"],
+        "type": "market",
+        "operation": "subscribe",
+    }
