@@ -4,7 +4,6 @@
 import argparse
 import asyncio
 import inspect
-import importlib
 import logging
 import os
 import sys
@@ -81,25 +80,6 @@ def build_config(cls, **kwargs):
     filtered = {k: v for k, v in kwargs.items() if k in accepted}
     return cls(**filtered)
 
-
-
-
-def load_strategy_classes():
-    """Load strategy classes lazily with a friendlier syntax error message."""
-    try:
-        module = importlib.import_module("strategies.flash_crash")
-    except SyntaxError as exc:
-        print(f"{Colors.RED}Syntax error in strategies/flash_crash.py: {exc}{Colors.RESET}")
-        print("This often happens due to unresolved merge conflict markers.")
-        print("Open strategies/flash_crash.py, remove <<<<<<< ======= >>>>>>> blocks, then retry.")
-        sys.exit(1)
-
-    return (
-        module.DemoFlashCrashConfig,
-        module.DemoFlashCrashStrategy,
-        module.FlashCrashConfig,
-        module.FlashCrashStrategy,
-    )
 
 def build_real_bot() -> TradingBot:
     private_key = os.environ.get("POLY_PRIVATE_KEY")

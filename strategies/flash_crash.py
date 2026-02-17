@@ -380,6 +380,9 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             size=size,
             order_id=pos.order_id,
             fee_usd=result.fee_usd,
+            entry_price=current_price,
+            size=size,
+            order_id=pos.order_id,
             bankroll=self.bankroll,
             mode="paper",
         )
@@ -441,6 +444,17 @@ class DemoFlashCrashStrategy(FlashCrashStrategy):
             raw_exit_price=current_price,
             size=sold_shares,
             remaining_size=position.size if partial_close else 0.0,
+        pnl = position.get_pnl(current_price)
+        self.bankroll += pnl
+        self.positions.close_position(position.id, realized_pnl=pnl)
+        self.log(f"PAPER SELL {position.side.upper()} @ {current_price:.4f} PnL: ${pnl:+.2f}", "success")
+        self._run_logger.event(
+            "trade_closed",
+            side=position.side,
+            token_id=position.token_id,
+            entry_price=position.entry_price,
+            exit_price=current_price,
+            size=position.size,
             pnl=pnl,
             result="win" if pnl >= 0 else "loss",
             entry_time=position.entry_time,

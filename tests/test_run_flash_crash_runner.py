@@ -1,7 +1,6 @@
 """Tests for run_flash_crash runner compatibility helpers."""
 
 import sys
-import importlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -46,21 +45,3 @@ def test_build_config_passes_supported_kwargs_for_modern_config():
     assert cfg.coin == "ETH"
     assert cfg.interval_minutes == 15
     assert cfg.size_percent == 3.0
-
-
-def test_load_strategy_classes_prints_helpful_message_on_syntax_error(monkeypatch, capsys):
-    from apps import run_flash_crash
-
-    def boom(_name):
-        raise SyntaxError("( was never closed", ("strategies/flash_crash.py", 438, 0, "self._run_logger.event("))
-
-    monkeypatch.setattr(importlib, "import_module", boom)
-
-    try:
-        run_flash_crash.load_strategy_classes()
-    except SystemExit as exc:
-        assert exc.code == 1
-
-    out = capsys.readouterr().out
-    assert "Syntax error in strategies/flash_crash.py" in out
-    assert "merge conflict markers" in out
